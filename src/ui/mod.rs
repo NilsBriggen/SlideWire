@@ -50,6 +50,7 @@ pub struct App {
     picked: Arc<Mutex<Option<(PickPurpose, PathBuf)>>>,
     status: Option<(String, Instant)>,
     expanded_control: Option<String>,
+    control_search: String,
     /// Peak-hold per strip: (value, time it was set).
     meter_hold: HashMap<String, (f32, f64)>,
     show_sources: bool,
@@ -94,6 +95,7 @@ impl App {
             picked: Arc::default(),
             status: None,
             expanded_control: None,
+            control_search: String::new(),
             meter_hold: HashMap::new(),
             show_sources: true,
             show_doctor: crate::config::env("TAB").as_deref() == Some("doctor"),

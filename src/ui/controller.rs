@@ -72,66 +72,105 @@ impl App {
                     widgets::hint(ui, "New controls start listening: move the control on your device.");
                 });
                 ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(icon::MAGNIFYING_GLASS).color(TEXT_DIM));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.control_search)
+                            .hint_text("Filter controls")
+                            .desired_width(220.0),
+                    );
+                });
+                ui.add_space(4.0);
+                let search = self.control_search.trim().to_lowercase();
                 let mut remove = None;
-                for (id, c) in p.controls.iter_mut() {
-                    let open = self.expanded_control.as_deref() == Some(id.as_str());
-                    let learning = learn.as_ref().is_some_and(|l| &l.control_id == id);
-                    let touched = activity.get(id).is_some_and(|(t, _)| t.elapsed().as_millis() < 400);
-                    let stroke = if learning {
-                        Stroke::new(1.5, ASSIGN)
-                    } else if touched {
-                        Stroke::new(1.5, CYAN)
-                    } else if open {
-                        Stroke::new(1.0, egui::Color32::from_rgb(0x4a, 0x4f, 0x5f))
-                    } else {
-                        Stroke::new(1.0, egui::Color32::from_rgb(0x2c, 0x2f, 0x39))
-                    };
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(0x19, 0x1a, 0x20))
-                        .stroke(stroke)
-                        .corner_radius(6)
-                        .inner_margin(egui::Margin::symmetric(10, 6))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let (glyph, color) = match c.kind {
-                                    ControlKind::Fader if c.delta.is_some() => (icon::ARROWS_CLOCKWISE, CYAN),
-                                    ControlKind::Fader => (icon::FADERS, CYAN),
-                                    ControlKind::Button => (icon::CURSOR_CLICK, ASSIGN),
-                                    ControlKind::Output => (icon::LIGHTNING, RUN),
-                                };
-                                ui.label(RichText::new(glyph).size(16.0).color(color));
-                                ui.add(egui::TextEdit::singleline(&mut c.name).desired_width(150.0));
-                                widgets::chip(ui, &message_summary(c), TEXT_DIM);
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button(icon::TRASH).on_hover_text("Delete").clicked() {
-                                        remove = Some(id.clone());
-                                    }
-                                    if ui.selectable_label(open, icon::GEAR_SIX).on_hover_text("Edit").clicked() {
-                                        self.expanded_control = if open { None } else { Some(id.clone()) };
-                                    }
-                                    if c.kind != ControlKind::Fader
-                                        && ui.button("Test").on_hover_text("Light it on the device").clicked()
-                                    {
-                                        test = Some(id.clone());
-                                    }
-                                    let learn_text = if learning {
-                                        let t = ui.input(|i| i.time) as f32;
-                                        ui.ctx().request_repaint();
-                                        RichText::new(format!("{}  Listening…", icon::RECORD))
-                                            .color(ASSIGN.gamma_multiply(0.6 + 0.4 * (t * 6.0).sin().abs()))
-                                    } else {
-                                        RichText::new(format!("{}  Learn", icon::CROSSHAIR))
-                                    };
-                                    if ui.button(learn_text).clicked() {
-                                        learn_req = Some(if learning { None } else { Some(LearnRequest { control_id: id.clone() }) });
+                for (title, ids) in control_sections(&p) {
+                    let shown: Vec<String> = ids
+                        .into_iter()
+                        .filter(|id| {
+                            search.is_empty()
+                                || p.controls.get(id).is_some_and(|c| {
+                                    c.name.to_lowercase().contains(&search)
+                                        || message_summary(c).to_lowercase().contains(&search)
+                                })
+                        })
+                        .collect();
+                    if shown.is_empty() {
+                        continue;
+                    }
+                    // Open while filtering, or when a control inside is being edited or learned.
+                    let force_open = !search.is_empty()
+                        || shown.iter().any(|id| {
+                            self.expanded_control.as_deref() == Some(id.as_str())
+                                || learn.as_ref().is_some_and(|l| &l.control_id == id)
+                        });
+                    let header = egui::CollapsingHeader::new(
+                        RichText::new(format!("{title}  ·  {}", shown.len())).font(semibold(13.5)),
+                    )
+                    .id_salt(("section", title.as_str()));
+                    let header = if force_open { header.open(Some(true)) } else { header };
+                    header.show(ui, |ui| {
+                        for id in &shown {
+                            let Some(c) = p.controls.get_mut(id) else { continue };
+                            let open = self.expanded_control.as_deref() == Some(id.as_str());
+                            let learning = learn.as_ref().is_some_and(|l| &l.control_id == id);
+                            let touched = activity.get(id).is_some_and(|(t, _)| t.elapsed().as_millis() < 400);
+                            let stroke = if learning {
+                                Stroke::new(1.5, ASSIGN)
+                            } else if touched {
+                                Stroke::new(1.5, CYAN)
+                            } else if open {
+                                Stroke::new(1.0, egui::Color32::from_rgb(0x4a, 0x4f, 0x5f))
+                            } else {
+                                Stroke::new(1.0, egui::Color32::from_rgb(0x2c, 0x2f, 0x39))
+                            };
+                            egui::Frame::new()
+                                .fill(egui::Color32::from_rgb(0x19, 0x1a, 0x20))
+                                .stroke(stroke)
+                                .corner_radius(6)
+                                .inner_margin(egui::Margin::symmetric(10, 6))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        let (glyph, color) = match c.kind {
+                                            ControlKind::Fader if c.delta.is_some() => (icon::ARROWS_CLOCKWISE, CYAN),
+                                            ControlKind::Fader => (icon::FADERS, CYAN),
+                                            ControlKind::Button => (icon::CURSOR_CLICK, ASSIGN),
+                                            ControlKind::Output => (icon::LIGHTNING, RUN),
+                                        };
+                                        ui.label(RichText::new(glyph).size(16.0).color(color));
+                                        ui.add(egui::TextEdit::singleline(&mut c.name).desired_width(150.0));
+                                        widgets::chip(ui, &message_summary(c), TEXT_DIM);
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if ui.button(icon::TRASH).on_hover_text("Delete").clicked() {
+                                                remove = Some(id.clone());
+                                            }
+                                            if ui.selectable_label(open, icon::GEAR_SIX).on_hover_text("Edit").clicked() {
+                                                self.expanded_control = if open { None } else { Some(id.clone()) };
+                                            }
+                                            if c.kind != ControlKind::Fader
+                                                && ui.button("Test").on_hover_text("Light it on the device").clicked()
+                                            {
+                                                test = Some(id.clone());
+                                            }
+                                            let learn_text = if learning {
+                                                let t = ui.input(|i| i.time) as f32;
+                                                ui.ctx().request_repaint();
+                                                RichText::new(format!("{}  Listening…", icon::RECORD))
+                                                    .color(ASSIGN.gamma_multiply(0.6 + 0.4 * (t * 6.0).sin().abs()))
+                                            } else {
+                                                RichText::new(format!("{}  Learn", icon::CROSSHAIR))
+                                            };
+                                            if ui.button(learn_text).clicked() {
+                                                learn_req = Some(if learning { None } else { Some(LearnRequest { control_id: id.clone() }) });
+                                            }
+                                        });
+                                    });
+                                    if open {
+                                        ui.add_space(4.0);
+                                        edit_control(ui, id, c);
                                     }
                                 });
-                            });
-                            if open {
-                                ui.add_space(4.0);
-                                edit_control(ui, id, c);
-                            }
-                        });
+                        }
+                    });
                 }
                 if let Some(id) = remove {
                     p.remove_control(&id);
@@ -183,6 +222,36 @@ impl App {
             self.send(UiCmd::SendTest(id));
         }
     }
+}
+
+/// Controls in collapsible sections: one per channel (groups whose names end
+/// in the same number, like "Fader 1" and "Knob 1"), then everything else.
+fn control_sections(p: &crate::profile::Profile) -> Vec<(String, Vec<String>)> {
+    let mut sections: Vec<(String, Vec<String>)> = Vec::new();
+    let mut placed = std::collections::HashSet::new();
+    for g in p.groups.values() {
+        let title = match g.name.rsplit(' ').next().and_then(|n| n.parse::<u32>().ok()) {
+            Some(n) => format!("Channel {n}"),
+            None => g.name.clone(),
+        };
+        let ids: Vec<String> = Role::ALL
+            .iter()
+            .flat_map(|r| g.role(*r).iter().cloned())
+            .filter(|id| p.controls.contains_key(id) && placed.insert(id.clone()))
+            .collect();
+        match sections.iter_mut().find(|(t, _)| *t == title) {
+            Some((_, list)) => list.extend(ids),
+            None => sections.push((title, ids)),
+        }
+    }
+    sections.sort_by_key(|(t, _)| {
+        t.strip_prefix("Channel ").and_then(|n| n.parse::<u32>().ok()).map_or((1, 0), |n| (0, n))
+    });
+    let other: Vec<String> = p.controls.keys().filter(|id| !placed.contains(*id)).cloned().collect();
+    if !other.is_empty() {
+        sections.push(("Other controls".into(), other));
+    }
+    sections
 }
 
 fn message_summary(c: &Control) -> String {
