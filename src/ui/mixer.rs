@@ -12,9 +12,10 @@ use crate::engine::{StripView, UiCmd};
 use crate::mapping;
 use crate::profile::{AppMatch, Target, Widget};
 
-const STRIP_MIN_W: f32 = 104.0;
+const STRIP_MIN_W: f32 = 92.0;
 const STRIP_MAX_W: f32 = 168.0;
 const GAP: f32 = 10.0;
+const MASTER_W: f32 = 104.0;
 const FADER_H: f32 = 400.0;
 const KNOB_H: f32 = 236.0;
 /// Height of the knob section in a channel strip.
@@ -100,12 +101,19 @@ impl App {
         let avail_h = ui.available_height();
         egui::ScrollArea::both().id_salt("console").auto_shrink([false, false]).show(ui, |ui| {
             if !channels.is_empty() {
-                let w = strip_width(avail, channels.len());
+                // The master strip only when it fits next to full-size channels.
+                let n = channels.len() as f32;
+                let show_master = avail >= n * STRIP_MIN_W + (n - 1.0) * GAP + 2.0 * GAP + MASTER_W;
+                let w = strip_width(avail - if show_master { MASTER_W + GAP * 2.0 } else { 0.0 }, channels.len());
                 let h = (avail_h - if rest.is_empty() { 4.0 } else { 280.0 }).max(520.0);
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = GAP;
                     for c in &channels {
                         self.channel_strip(ui, c, &audio, vec2(w, h), dragging);
+                    }
+                    if show_master {
+                        ui.add_space(GAP);
+                        self.master_strip(ui, &audio, vec2(MASTER_W, h));
                     }
                 });
                 if !rest.is_empty() {
@@ -250,6 +258,74 @@ impl App {
         self.section(ui, c.fader, fader_zone, audio, false, None, dragging);
     }
 
+    /// The default output, always at the right end of the console.
+    fn master_strip(&mut self, ui: &mut egui::Ui, audio: &AudioState, size: Vec2) {
+        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+        let painter = ui.painter_at(rect.expand(12.0));
+        widgets::bevel_panel(&painter, rect, 8, pal().strip_top, pal().strip_bottom);
+        let head = egui::Rect::from_min_size(rect.min, vec2(rect.width(), 28.0));
+        painter.text(head.center(), egui::Align2::CENTER_CENTER, "Master", semibold(14.0), pal().text);
+        let Some(sink) = audio.sinks.iter().find(|d| d.name == audio.default_sink) else {
+            painter.text(rect.center(), egui::Align2::CENTER_CENTER, "No output", mono(11.0), pal().text_faint);
+            return;
+        };
+        let (curve, boost, peak) = {
+            let sh = self.shared.lock().unwrap();
+            let s = &sh.store.settings;
+            let peak = sh.source_peaks.get(&MeterKey::Sink(sink.name.clone())).copied().unwrap_or(0.0);
+            (s.curve, if s.allow_boost { 1.5 } else { 1.0 }, peak)
+        };
+        let inner = egui::Rect::from_min_max(head.left_bottom() + vec2(8.0, 6.0), rect.max - vec2(8.0, 10.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
+        let ui = &mut child;
+        ui.spacing_mut().item_spacing.y = 8.0;
+        ui.vertical_centered(|ui| {
+            // Pick the output from the LCD.
+            let img = self.icons.image(&[sink.icon.clone(), "audio-speakers".into()]);
+            let lcd = widgets::lcd(ui, vec2(inner.width(), 30.0), img, &sink.label, sink.mute, None)
+                .interact(Sense::click())
+                .on_hover_text(format!("{}\nClick to choose the default output", sink.description))
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            egui::Popup::menu(&lcd).show(|ui| {
+                ui.label(RichText::new("Default output").font(semibold(13.0)));
+                for d in &audio.sinks {
+                    let on = d.name == sink.name;
+                    let text = format!("{}  {}", if on { icon::CHECK } else { "    " }, d.label);
+                    if ui.selectable_label(on, text).on_hover_text(&d.description).clicked() && !on {
+                        self.send(UiCmd::SetDefault(Kind::Sink, d.name.clone()));
+                        ui.close();
+                    }
+                }
+            });
+            let led = vec2(36.0, 22.0);
+            if widgets::led_button(ui, "M", sink.mute, MUTE, led).on_hover_text("Mute the output").clicked() {
+                self.send(UiCmd::SetStreamMute(Kind::Sink, sink.index, !sink.mute));
+            }
+            let h = ui.available_height() - 46.0;
+            let mut pos = mapping::inverse_curve(sink.volume / boost, curve);
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.add_space((inner.width() - 52.0 - 10.0 - 8.0) / 2.0);
+                    let color = if sink.mute { pal().accent.gamma_multiply(0.35) } else { pal().accent };
+                    let marks = mapping::db_marks(boost, curve);
+                    let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, None, &marks);
+                    widgets::segment_meter(ui, peak, 0.0, vec2(10.0, h - 20.0));
+                    r.changed()
+                })
+                .inner;
+            if changed {
+                self.send(UiCmd::SetStreamVolume(Kind::Sink, sink.index, mapping::curve(pos, curve) * boost));
+            }
+            let text = if sink.mute { "MUTE".to_string() } else { format!("{:>3.0}%", sink.volume * 100.0) };
+            let color = if sink.mute { pal().mute_text } else { pal().readout };
+            ui.label(RichText::new(text).font(mono(13.0)).color(color));
+            if !sink.mute {
+                ui.add_space(-6.0);
+                ui.label(RichText::new(db_text(sink.volume)).font(mono(10.5)).color(pal().text_faint));
+            }
+        });
+    }
+
     /// One strip's controls inside `zone`: a drop target with display, buttons,
     /// knob or fader, meter and readout. `compact` is the knob part of a
     /// channel strip.
@@ -351,14 +427,17 @@ impl App {
                     }
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        let small = vec2(22.0, 18.0);
-                        ui.add_space(((inner.width() - 2.0 * small.x - 4.0 - 52.0) / 2.0).max(0.0));
+                        let narrow = inner.width() < 96.0;
+                        let small = vec2(if narrow { 18.0 } else { 22.0 }, 18.0);
+                        let text_w = if narrow { 34.0 } else { 52.0 };
+                        ui.add_space(((inner.width() - 2.0 * small.x - 8.0 - text_w) / 2.0).max(0.0));
                         self.strip_buttons(ui, s, audio, small, false);
                         ui.add_space(4.0);
-                        readout(ui, s, 12.0);
+                        readout(ui, s, if narrow { 10.5 } else { 12.0 });
                     });
                 } else {
-                    let led = vec2(28.0, 22.0);
+                    // Three buttons; narrower on narrow strips.
+                    let led = vec2(((inner.width() - 12.0) / 3.0).min(28.0), 22.0);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         ui.add_space((inner.width() - led.x * 3.0 - 12.0) / 2.0);
