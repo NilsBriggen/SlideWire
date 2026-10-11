@@ -76,23 +76,30 @@ impl App {
                 Vec::new(),
             ))
         };
+        // Narrow: the buttons on the right lose their labels so the bank tabs fit.
+        let compact = ui.available_width() < 560.0 + 72.0 * bank_count as f32;
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Console").font(semibold(17.0)));
-            ui.add_space(6.0);
+            if !compact {
+                ui.label(RichText::new("Console").font(semibold(17.0)));
+                ui.add_space(6.0);
+            }
             self.bank_tabs(ui, bank, bank_count);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let label = if self.show_sources { "Hide sources" } else { "Show sources" };
-                if widgets::icon_button(ui, icon::SQUARES_FOUR, label).clicked() {
+                let toggle = if compact {
+                    widgets::icon_framed(ui, icon::SQUARES_FOUR, label)
+                } else {
+                    widgets::icon_button(ui, icon::SQUARES_FOUR, label)
+                };
+                if toggle.clicked() {
                     self.show_sources = !self.show_sources;
                 }
-                self.scenes_menu(ui, &scenes);
+                self.scenes_menu(ui, &scenes, compact);
             });
         });
         ui.add_space(6.0);
         if strips.is_empty() {
-            widgets::card(ui, icon::INFO, "No active profile", |ui| {
-                ui.label("Create or import a controller profile under Profiles.");
-            });
+            self.no_profile(ui);
             return;
         }
         let dragging = egui::DragAndDrop::has_payload_of_type::<Target>(ui.ctx());
@@ -173,20 +180,30 @@ impl App {
                 }
             });
         }
-        if ui.small_button(icon::PLUS).on_hover_text("Add a bank").clicked() {
+        if widgets::icon_framed(ui, icon::PLUS, "Add a bank").clicked() {
             self.edit_profile(|p| {
                 p.banks.push(Default::default());
                 p.bank = p.bank_count() - 1;
             });
         }
-        if count == 1 {
-            widgets::hint(ui, "Drag apps and devices from the right onto a strip, or use the S button.");
+        // Leave room for the Scenes and Sources buttons on the right.
+        let room = ui.available_width() - 290.0;
+        if count == 1 && room > 160.0 {
+            ui.scope(|ui| {
+                ui.set_max_width(room);
+                let text = "Drag apps and devices from the right onto a strip, or use the S button.";
+                ui.add(egui::Label::new(RichText::new(text).size(12.5).color(pal().text_dim)).truncate());
+            });
         }
     }
 
     /// Recall, save and delete scenes (volume and mute snapshots).
-    fn scenes_menu(&mut self, ui: &mut egui::Ui, scenes: &[String]) {
-        let button = widgets::icon_button(ui, icon::BOOKMARKS_SIMPLE, "Scenes");
+    fn scenes_menu(&mut self, ui: &mut egui::Ui, scenes: &[String], compact: bool) {
+        let button = if compact {
+            widgets::icon_framed(ui, icon::BOOKMARKS_SIMPLE, "Scenes")
+        } else {
+            widgets::icon_button(ui, icon::BOOKMARKS_SIMPLE, "Scenes")
+        };
         // Stays open while typing a name (a plain menu closes on any click inside).
         egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.set_width(260.0);
@@ -201,14 +218,10 @@ impl App {
                         ui.close();
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button(icon::TRASH).on_hover_text("Delete").clicked() {
+                        if widgets::icon_framed(ui, icon::TRASH, "Delete").clicked() {
                             delete = Some(name.clone());
                         }
-                        if ui
-                            .small_button(icon::FLOPPY_DISK)
-                            .on_hover_text("Overwrite with the current volumes")
-                            .clicked()
-                        {
+                        if widgets::icon_framed(ui, icon::FLOPPY_DISK, "Overwrite with the current volumes").clicked() {
                             self.send(UiCmd::SaveScene(name.clone()));
                             self.flash(format!("Saved scene \"{name}\""));
                         }
@@ -310,7 +323,10 @@ impl App {
                 }
             });
             let led = vec2(36.0, 22.0);
-            if widgets::led_button(ui, "M", sink.mute, MUTE, led).on_hover_text("Mute the output").clicked() {
+            if widgets::led_button(ui, "M", sink.mute, MUTE, led, "Mute the output")
+                .on_hover_text("Mute the output")
+                .clicked()
+            {
                 self.send(UiCmd::SetStreamMute(Kind::Sink, sink.index, !sink.mute));
             }
             let h = ui.available_height() - 46.0;
@@ -320,7 +336,7 @@ impl App {
                     ui.add_space((inner.width() - 52.0 - 10.0 - 8.0) / 2.0);
                     let color = if sink.mute { pal().accent.gamma_multiply(0.35) } else { pal().accent };
                     let marks = mapping::db_marks(&mapping::Range { min: 0.0, top: boost, curve });
-                    let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, None, &marks);
+                    let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, None, &marks, "Master volume");
                     widgets::segment_meter(ui, peak, 0.0, vec2(10.0, h - 20.0));
                     r.changed()
                 })
@@ -428,7 +444,7 @@ impl App {
                     let changed = ui
                         .horizontal(|ui| {
                             ui.add_space((inner.width() - d - 6.0 - 8.0) / 2.0);
-                            let r = widgets::knob(ui, &mut pos, d, color, s.pickup);
+                            let r = widgets::knob(ui, &mut pos, d, color, s.pickup, &strip_name(s));
                             widgets::segment_meter(ui, s.peak, hold, vec2(6.0, d));
                             r.changed()
                         })
@@ -460,7 +476,8 @@ impl App {
                         .horizontal(|ui| {
                             ui.add_space((inner.width() - 52.0 - 10.0 - 8.0) / 2.0);
                             let marks = if s.volume.is_some() { mapping::db_marks(&s.range) } else { Vec::new() };
-                            let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, s.pickup, &marks);
+                            let r =
+                                widgets::fader(ui, &mut pos, vec2(52.0, h), color, s.pickup, &marks, &strip_name(s));
                             widgets::segment_meter(ui, s.peak, hold, vec2(10.0, h - 20.0));
                             r.changed()
                         })
@@ -546,12 +563,14 @@ impl App {
 
     /// S (assign menu), M (mute) and, with `run`, R buttons.
     fn strip_buttons(&mut self, ui: &mut egui::Ui, s: &StripView, audio: &AudioState, size: Vec2, run: bool) {
-        let s_resp = widgets::led_button(ui, "S", s.assigned, ASSIGN, size).on_hover_text("Assign");
-        if widgets::led_button(ui, "M", s.muted, MUTE, size).on_hover_text("Mute").clicked() {
+        let name = strip_name(s);
+        let s_resp =
+            widgets::led_button(ui, "S", s.assigned, ASSIGN, size, &format!("Assign {name}")).on_hover_text("Assign");
+        if widgets::led_button(ui, "M", s.muted, MUTE, size, &format!("Mute {name}")).on_hover_text("Mute").clicked() {
             self.send(UiCmd::ToggleGroupMute(s.id.clone()));
         }
         if run
-            && widgets::led_button(ui, "R", s.running, RUN, size)
+            && widgets::led_button(ui, "R", s.running, RUN, size, &format!("Run {name}"))
                 .on_hover_text("Run: make the device default / start the app")
                 .clicked()
         {
@@ -592,7 +611,7 @@ impl App {
                 }
                 ui.label(t.label());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button(icon::X).on_hover_text("Remove").clicked() {
+                    if widgets::icon_framed(ui, icon::X, "Remove").clicked() {
                         remove = Some(i);
                     }
                 });
@@ -863,7 +882,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut self.custom_pattern).desired_width(140.0).hint_text("firefox*"));
             ui.checkbox(&mut self.custom_regex, "regex");
-            if ui.button(icon::PLUS).clicked() && !self.custom_pattern.trim().is_empty() {
+            if widgets::icon_framed(ui, icon::PLUS, "Add").clicked() && !self.custom_pattern.trim().is_empty() {
                 let pattern = self.custom_pattern.trim().to_string();
                 self.add_target(
                     gid,
@@ -1151,11 +1170,7 @@ impl App {
                         })
                         .response
                         .on_hover_text("Where this bus plays");
-                    if ui
-                        .add(egui::Button::new(RichText::new(icon::TRASH).color(pal().text_dim)).frame(false))
-                        .on_hover_text("Remove bus")
-                        .clicked()
-                    {
+                    if widgets::icon_only(ui, icon::TRASH, "Remove bus").clicked() {
                         remove = Some(i);
                     }
                 });
@@ -1285,9 +1300,7 @@ impl App {
             // Which device an app plays on (or records from).
             if let Some((current, devices)) = route {
                 let hover = if kind == Kind::SinkInput { "Play on…" } else { "Record from…" };
-                let button = ui
-                    .add(egui::Button::new(RichText::new(icon::CARET_DOWN).color(pal().text_dim)).frame(false))
-                    .on_hover_text(hover);
+                let button = widgets::icon_only(ui, icon::CARET_DOWN, hover);
                 egui::Popup::menu(&button).show(|ui| {
                     ui.label(RichText::new(hover).font(semibold(13.0)));
                     let app = match &target {
@@ -1370,6 +1383,18 @@ pub(super) fn target_glyph(t: &Target) -> &'static str {
 /// "47%", "MUTE", or the volume in amber with an arrow while the hardware
 /// control waits to pick it up.
 /// "Firefox ×2 + Spotify": names joined, repeats counted.
+/// A strip's name for screen readers: "Fader 1, Music (Spotify)".
+fn strip_name(s: &StripView) -> String {
+    let mut name = s.name.clone();
+    if let Some(l) = &s.label {
+        name = format!("{name}, {l}");
+    }
+    if !s.resolved.is_empty() {
+        name = format!("{name} ({})", s.resolved.join(", "));
+    }
+    name
+}
+
 fn join_counted(names: &[String]) -> String {
     let mut counts: Vec<(&str, usize)> = Vec::new();
     for n in names {

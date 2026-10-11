@@ -429,6 +429,27 @@ fn has_owner(conn: &Connection, name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Is there a system tray to show our icon in? (GNOME has none without an
+/// extension.)
+pub fn has_tray_host() -> bool {
+    client().is_ok_and(|c| has_owner(&c, "org.kde.StatusNotifierWatcher"))
+}
+
+/// A one-off desktop notification.
+pub fn notify_text(summary: &str, body: &str) {
+    use std::collections::HashMap;
+    use zbus::zvariant::Value;
+    let Ok(conn) = client() else { return };
+    let hints: HashMap<&str, Value> = HashMap::new();
+    let _ = conn.call_method(
+        Some("org.freedesktop.Notifications"),
+        "/org/freedesktop/Notifications",
+        Some("org.freedesktop.Notifications"),
+        "Notify",
+        &("Slidewire", 0u32, crate::APP_ID, summary, body, Vec::<&str>::new(), hints, 6000i32),
+    );
+}
+
 /// A volume pop-up as a desktop notification (GNOME, dunst, mako, ...).
 /// The "value" hint draws a bar where supported; `replaces` keeps it to one
 /// notification. Returns its id.

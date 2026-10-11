@@ -21,9 +21,7 @@ impl App {
             (sh.active().cloned(), sh.audio.clone(), profiles, sh.activity.clone())
         };
         let Some(mut p) = profile else {
-            widgets::card(ui, icon::INFO, "No active profile", |ui| {
-                ui.label("Create or import a profile under Profiles.");
-            });
+            self.no_profile(ui);
             return;
         };
         let before = p.buttons.clone();
@@ -185,11 +183,7 @@ impl App {
                             }
                         }
                     });
-                    if ui
-                        .add(egui::Button::new(RichText::new(icon::TRASH).color(pal().text_dim)).frame(false))
-                        .on_hover_text("Remove rule")
-                        .clicked()
-                    {
+                    if widgets::icon_only(ui, icon::TRASH, "Remove rule").clicked() {
                         remove = Some(i);
                     }
                 });
@@ -298,7 +292,7 @@ impl App {
                                 );
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button(icon::TRASH).on_hover_text("Delete").clicked() {
+                                if widgets::icon_framed(ui, icon::TRASH, "Delete").clicked() {
                                     action = Some(("delete", id.clone()));
                                 }
                                 if ui
@@ -308,7 +302,7 @@ impl App {
                                 {
                                     action = Some(("export", id.clone()));
                                 }
-                                if ui.button(icon::COPY).on_hover_text("Duplicate").clicked() {
+                                if widgets::icon_framed(ui, icon::COPY, "Duplicate").clicked() {
                                     action = Some(("duplicate", id.clone()));
                                 }
                                 if !is_active && widgets::icon_button(ui, icon::CHECK, "Use").clicked() {
@@ -360,8 +354,13 @@ impl App {
                 if let Some(mut p) = sh.store.profiles.get(&arg).cloned() {
                     p.name = format!("{} (copy)", p.name);
                     let id = crate::profile::new_id();
+                    let name = p.name.clone();
                     sh.store.profiles.insert(id.clone(), p);
                     sh.store.touch(&id);
+                    drop(sh);
+                    // Straight into renaming the copy.
+                    self.profile_rename = Some((id, name));
+                    self.flash("Duplicated; give the copy a name");
                 }
             }
             "export" => {
@@ -439,11 +438,11 @@ impl App {
                     appearance_card(&mut cols[0], &mut s);
                     cols[0].add_space(10.0);
                     volume_card(&mut cols[0], &mut s);
-                    midi_card(&mut cols[1], &mut s, &ports_out);
+                    cols[0].add_space(10.0);
+                    advanced_card(&mut cols[0], &mut s, &ports_out);
+                    self.nano_card(&mut cols[1]);
                     cols[1].add_space(10.0);
                     obs_card(&mut cols[1], &mut s, &self.events);
-                    cols[1].add_space(10.0);
-                    self.nano_card(&mut cols[1]);
                     cols[1].add_space(10.0);
                     self.about_card(&mut cols[1]);
                 });
@@ -455,11 +454,11 @@ impl App {
                 ui.add_space(10.0);
                 volume_card(ui, &mut s);
                 ui.add_space(10.0);
-                midi_card(ui, &mut s, &ports_out);
+                self.nano_card(ui);
                 ui.add_space(10.0);
                 obs_card(ui, &mut s, &self.events);
                 ui.add_space(10.0);
-                self.nano_card(ui);
+                advanced_card(ui, &mut s, &ports_out);
                 ui.add_space(10.0);
                 self.about_card(ui);
             }
@@ -480,6 +479,7 @@ impl App {
                 });
             }
             widgets::toggle(ui, &mut s.start_minimized, "Start minimised to the tray");
+            widgets::toggle(ui, &mut s.close_quits, "Closing the window quits (instead of hiding to the tray)");
             widgets::toggle(ui, &mut s.auto_switch, "Switch to the matching profile when a controller is plugged in");
             widgets::toggle(ui, &mut s.osd, "Show a volume pop-up when a fader moves");
         });
@@ -549,17 +549,45 @@ impl App {
 
     fn about_card(&mut self, ui: &mut egui::Ui) {
         widgets::card(ui, icon::INFO, "About", |ui| {
-            ui.label(format!("Slidewire {}", env!("CARGO_PKG_VERSION")));
-            let dir = self.shared.lock().unwrap().store.dir.clone();
             ui.horizontal(|ui| {
-                ui.label(RichText::new(dir.display().to_string()).font(mono(12.0)).color(pal().text_dim));
-                if ui.small_button(format!("{}  Open", icon::FOLDER_OPEN)).clicked()
+                if let Some(logo) = &self.logo {
+                    ui.add(egui::Image::new(logo).fit_to_exact_size(vec2(40.0, 40.0)));
+                }
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    ui.label(RichText::new(format!("Slidewire {}", env!("CARGO_PKG_VERSION"))).font(semibold(15.0)));
+                    widgets::hint(ui, "Free software under the GPL 3.0 or later.");
+                });
+            });
+            ui.add_space(SP_S);
+            ui.horizontal_wrapped(|ui| {
+                ui.hyperlink_to(format!("{}  Source code", icon::CODE), REPO);
+                ui.hyperlink_to(format!("{}  Report a problem", icon::BUG), format!("{REPO}/issues"));
+            });
+            ui.add_space(SP_S);
+            ui.horizontal_wrapped(|ui| {
+                let dir = self.shared.lock().unwrap().store.dir.clone();
+                if ui
+                    .button(format!("{}  Open settings folder", icon::FOLDER_OPEN))
+                    .on_hover_text(dir.display().to_string())
+                    .clicked()
                     && let Err(e) = crate::actions::spawn_detached(std::process::Command::new("xdg-open").arg(&dir))
                 {
-                    self.flash(format!("Couldn't open the folder: {e}"));
+                    self.problem(format!("Couldn't open the folder: {e}"));
+                }
+                if ui.button(format!("{}  Show the welcome again", icon::HAND_WAVING)).clicked() {
+                    self.welcome = Some(super::welcome::Welcome::new());
+                    self.welcome_other = None;
                 }
             });
-            widgets::hint(ui, "Settings and profiles are plain JSON files in this folder.");
+            ui.add_space(SP_S);
+            ui.collapsing("Third-party notices", |ui| {
+                widgets::hint(
+                    ui,
+                    "Inter and JetBrains Mono fonts: SIL Open Font License 1.1. Phosphor icons: MIT License. \
+                     Rust crates: see each crate's licence.",
+                );
+            });
         });
     }
 
@@ -690,7 +718,7 @@ fn action_editor(
             ui.horizontal(|ui| {
                 ui.label("Player");
                 ui.add(egui::TextEdit::singleline(player).hint_text("whichever is playing").desired_width(160.0));
-                let r = ui.small_button(icon::CARET_DOWN).on_hover_text("Running players");
+                let r = widgets::icon_framed(ui, icon::CARET_DOWN, "Running players");
                 egui::Popup::menu(&r).show(|ui| {
                     let players = crate::dbus::mpris_players();
                     if players.is_empty() {
@@ -854,7 +882,7 @@ fn action_editor(
                                 .hint_text("Scene name, exactly as in OBS")
                                 .desired_width(240.0),
                         );
-                        let r = ui.small_button(icon::CARET_DOWN).on_hover_text("Scenes in OBS");
+                        let r = widgets::icon_framed(ui, icon::CARET_DOWN, "Scenes in OBS");
                         if r.clicked() {
                             fetch_obs_scenes(ui.ctx());
                         }
@@ -921,6 +949,8 @@ fn device_checklist(ui: &mut egui::Ui, names: &mut Vec<String>, devices: &[crate
     }
 }
 
+const REPO: &str = "https://git.briggen.dev/NilsBriggen/SlideWire";
+
 fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
     use crate::config::{Accent, ThemeMode};
     widgets::card(ui, icon::PALETTE, "Appearance", |ui| {
@@ -947,6 +977,28 @@ fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
                 }
             }
         });
+        ui.horizontal(|ui| {
+            ui.label("Size");
+            ui.add_space(SP_S);
+            // Applied when the slider is let go: zooming while dragging
+            // would move the slider under the mouse.
+            let id = egui::Id::new("ui-scale-drag");
+            let mut v = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(s.ui_scale);
+            let r = ui.add(
+                egui::Slider::new(&mut v, 0.75..=2.0)
+                    .step_by(0.05)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+            );
+            if r.dragged() {
+                ui.data_mut(|d| d.insert_temp(id, v));
+            } else {
+                ui.data_mut(|d| d.remove::<f32>(id));
+                if (v - s.ui_scale).abs() > 0.001 {
+                    s.ui_scale = v;
+                }
+            }
+        });
+        widgets::hint(ui, "Ctrl + and Ctrl − change it too; Ctrl 0 resets.");
         widgets::toggle(ui, &mut s.reduce_motion, "Reduce motion");
     });
 }
@@ -979,21 +1031,21 @@ fn curve_preview(ui: &mut egui::Ui, exponent: f32) {
 
 fn volume_card(ui: &mut egui::Ui, s: &mut Settings) {
     widgets::card(ui, icon::SPEAKER_HIGH, "Volume", |ui| {
+        ui.label("Fine control at low volume");
         ui.horizontal(|ui| {
-            ui.label("Curve");
             ui.spacing_mut().slider_width = (ui.available_width() - 200.0).clamp(120.0, 320.0);
-            ui.add(egui::Slider::new(&mut s.curve, 0.5..=3.0).step_by(0.1).fixed_decimals(1));
+            ui.add(
+                egui::Slider::new(&mut s.curve, 0.5..=3.0)
+                    .step_by(0.1)
+                    .custom_formatter(|v, _| if (v - 1.0).abs() < 0.05 { "off".into() } else { format!("{v:.1}") }),
+            );
             ui.add_space(SP_S);
             curve_preview(ui, s.curve);
         });
         widgets::hint(
             ui,
-            "1.0 = same scale as the system volume slider. Higher values give finer control at low volume.",
+            "Off: faders follow the system volume slider. Higher: more of the fader's travel for quiet volumes.",
         );
-        ui.horizontal(|ui| {
-            ui.label("Encoder clicks from 0 to 100%");
-            ui.add(egui::DragValue::new(&mut s.default_steps).range(5..=400));
-        });
         widgets::toggle(ui, &mut s.allow_boost, "Allow boosting above 100% (up to 150%)");
         widgets::toggle(ui, &mut s.pickup, "Pick up: a fader only takes over once it reaches the volume");
         widgets::hint(
@@ -1050,10 +1102,16 @@ fn obs_card(ui: &mut egui::Ui, s: &mut Settings, events: &crossbeam_channel::Sen
     });
 }
 
-fn midi_card(ui: &mut egui::Ui, s: &mut Settings, ports_out: &[String]) {
-    widgets::card(ui, icon::PLUGS_CONNECTED, "MIDI", |ui| {
+/// Options most people never need.
+fn advanced_card(ui: &mut egui::Ui, s: &mut Settings, ports_out: &[String]) {
+    widgets::card(ui, icon::WRENCH, "Advanced", |ui| {
         widgets::toggle(ui, &mut s.led_heartbeat, "LED heartbeat: resend LED states every 5 s");
         widgets::hint(ui, "For devices that forget their LEDs.");
+        ui.horizontal(|ui| {
+            ui.label("Encoder clicks from 0 to 100%");
+            ui.add(egui::DragValue::new(&mut s.default_steps).range(5..=400));
+        });
+        widgets::hint(ui, "For endless knobs whose profile doesn't say.");
         ui.horizontal(|ui| {
             ui.label("Forward all MIDI input to");
             port_combo(ui, "passthru", &mut s.passthru, ports_out);

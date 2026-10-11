@@ -260,12 +260,26 @@ fn main() {
         });
     }
 
-    let mut open = !minimized || tray.is_none();
+    // Without a tray to come back from, closing the window has to quit.
+    let tray_shown = tray.is_some() && dbus::has_tray_host();
+    let mut open = !minimized || !tray_shown;
     loop {
         if open {
             run_window(shared.clone(), tx.clone(), window_rx.clone());
-            if QUIT.load(Ordering::SeqCst) || tray.is_none() {
+            let close_quits = shared.lock().unwrap().store.settings.close_quits;
+            if QUIT.load(Ordering::SeqCst) || !tray_shown || close_quits {
                 break;
+            }
+            // The first time, say where the app went.
+            let mut sh = shared.lock().unwrap();
+            if !sh.store.settings.tray_hint_shown {
+                sh.store.settings.tray_hint_shown = true;
+                sh.store.touch_settings();
+                drop(sh);
+                dbus::notify_text(
+                    "Slidewire is still running",
+                    "It keeps your controller working from the tray. Quit from the tray menu, or make the close button quit in Settings.",
+                );
             }
         }
         match window_rx.recv() {

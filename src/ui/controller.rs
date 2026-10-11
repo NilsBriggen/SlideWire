@@ -23,13 +23,12 @@ impl App {
             )
         };
         let Some(mut p) = profile else {
-            widgets::card(ui, icon::INFO, "No active profile", |ui| {
-                ui.label("Create or import a profile under Profiles.");
-            });
+            self.no_profile(ui);
             return;
         };
         let before = serde_json::to_string(&p).unwrap_or_default();
         let mut learn_req: Option<Option<LearnRequest>> = None;
+        let mut deleted: Option<String> = None;
         let mut test: Option<String> = None;
 
         egui::ScrollArea::vertical().id_salt("controller").auto_shrink([false, false]).show(ui, |ui| {
@@ -140,7 +139,7 @@ impl App {
                                         ui.add(egui::TextEdit::singleline(&mut c.name).desired_width(150.0));
                                         widgets::chip(ui, &message_summary(c), pal().text_dim);
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            if ui.button(icon::TRASH).on_hover_text("Delete").clicked() {
+                                            if widgets::icon_framed(ui, icon::TRASH, "Delete").clicked() {
                                                 remove = Some(id.clone());
                                             }
                                             if ui.selectable_label(open, icon::GEAR_SIX).on_hover_text("Edit").clicked() {
@@ -176,6 +175,7 @@ impl App {
                     });
                 }
                 if let Some(id) = remove {
+                    deleted = Some(p.control_name(&id));
                     p.remove_control(&id);
                 }
             });
@@ -211,6 +211,7 @@ impl App {
                     });
                 }
                 if let Some(gid) = remove_group {
+                    deleted = p.groups.get(&gid).map(|g| g.name.clone());
                     p.groups.shift_remove(&gid);
                     p.assignments.shift_remove(&gid);
                     for b in &mut p.banks {
@@ -225,6 +226,9 @@ impl App {
         }
         if serde_json::to_string(&p).unwrap_or_default() != before {
             self.edit_profile(|ap| *ap = p);
+        }
+        if let Some(name) = deleted {
+            self.toast(icon::TRASH, format!("Deleted {name}"), None, Some(super::ToastUndo::Edit));
         }
         if let Some(id) = test {
             self.send(UiCmd::SendTest(id));

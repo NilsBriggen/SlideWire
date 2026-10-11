@@ -71,6 +71,7 @@ impl ksni::Tray for Tray {
             .map(|p| (p.bank, p.bank_count(), p.scenes.keys().cloned().collect::<Vec<_>>()))
             .unwrap_or((0, 1, Vec::new()));
         let mic_muted = sh.audio.sources.iter().any(|d| d.name == sh.audio.default_source && d.mute);
+        let all_muted = !sh.audio.sinks.is_empty() && sh.audio.sinks.iter().all(|d| d.mute);
         drop(sh);
         let scene_items: Vec<ksni::MenuItem<Self>> = scenes
             .into_iter()
@@ -159,9 +160,9 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
-            StandardItem {
+            CheckmarkItem {
                 label: "Mute all outputs".into(),
-                icon_name: "audio-volume-muted".into(),
+                checked: all_muted,
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.events.send(Event::Ui(UiCmd::MuteAll));
                 }),

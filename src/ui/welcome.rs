@@ -26,6 +26,10 @@ impl App {
     pub(super) fn welcome_window(&mut self, ctx: &egui::Context) {
         let Some(w) = &self.welcome else { return };
         let (step, since) = (w.step, w.since);
+        if step + 1 == STEPS {
+            self.welcome_coach(ctx);
+            return;
+        }
         let (connected, ports, last_msg, profile_input, touched) = {
             let sh = self.shared.lock().unwrap();
             // The control that moved most recently, by name.
@@ -43,7 +47,7 @@ impl App {
                 touched,
             )
         };
-        let mut next = false;
+        let mut go: Option<isize> = None;
         let mut close = false;
         let frame = egui::Frame::popup(&ctx.global_style()).inner_margin(24).corner_radius(14);
         egui::Modal::new(egui::Id::new("welcome")).frame(frame).show(ctx, |ui| {
@@ -61,6 +65,7 @@ impl App {
             match step {
                 0 => {
                     step_title(ui, 1, "Connect your controller");
+                    let nano = |port: &str| port.to_lowercase().contains("nanokontrol2");
                     if let Some(port) = &connected {
                         ok_line(ui, &format!("{} is connected.", crate::midi::display_name(port)));
                     } else if ports.is_empty() {
@@ -75,15 +80,53 @@ impl App {
                             let pattern = name.trim_end_matches(" (raw)").to_string();
                             let on = !profile_input.is_empty() && pattern.contains(&profile_input);
                             if ui.selectable_label(on, format!("{}  {name}", icon::PIANO_KEYS)).clicked() {
-                                self.edit_profile(|p| {
-                                    p.input = pattern.clone();
-                                    p.output = pattern.clone();
-                                });
+                                if nano(port) {
+                                    self.edit_profile(|p| {
+                                        p.input = pattern.clone();
+                                        p.output = pattern.clone();
+                                    });
+                                } else {
+                                    self.welcome_other = Some(pattern.clone());
+                                }
                             }
                         }
                     }
+                    // Not a nanoKONTROL2: its layout has to come from somewhere.
+                    if let Some(other) = self.welcome_other.clone() {
+                        ui.add_space(SP_S);
+                        egui::Frame::new().fill(pal().inset).corner_radius(8).inner_margin(10).show(ui, |ui| {
+                            ui.label(RichText::new(format!("{other} isn't a nanoKONTROL2")).strong());
+                            widgets::hint(
+                                ui,
+                                "MIDI Mixer for Windows has presets for many controllers; import one, \
+                                 or map your controls by moving them.",
+                            );
+                            ui.horizontal(|ui| {
+                                if ui.button(format!("{}  Import a preset", icon::DOWNLOAD_SIMPLE)).clicked() {
+                                    self.tab = super::Tab::Profiles;
+                                    close = true;
+                                }
+                                if ui.button(format!("{}  Map my controller", icon::CROSSHAIR)).clicked() {
+                                    let id = crate::profile::new_id();
+                                    let p = crate::profile::Profile {
+                                        name: other.clone(),
+                                        input: other.clone(),
+                                        output: other.clone(),
+                                        ..Default::default()
+                                    };
+                                    let mut sh = self.shared.lock().unwrap();
+                                    sh.store.profiles.insert(id.clone(), p);
+                                    sh.store.touch(&id);
+                                    drop(sh);
+                                    self.send(super::UiCmd::ActivateProfile(id));
+                                    self.tab = super::Tab::Controller;
+                                    close = true;
+                                }
+                            });
+                        });
+                    }
                 }
-                1 => {
+                _ => {
                     step_title(ui, 2, "Move a fader or knob");
                     match (touched, last_msg.filter(|(_, t)| *t > since)) {
                         (Some(name), _) => ok_line(ui, &format!("Got it: {name}")),
@@ -101,42 +144,18 @@ impl App {
                         }
                     }
                 }
-                _ => {
-                    step_title(ui, 3, "Assign your first app");
-                    ui.label("Drag an app from Sources (on the right) onto a strip, or right-click a strip.");
-                    ui.add_space(4.0);
-                    for (k, what) in [
-                        ("S", "lists what a strip controls"),
-                        ("M", "mutes it"),
-                        ("R", "makes a device the default, or starts the app"),
-                    ] {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(k).font(mono(13.0)).color(pal().accent));
-                            ui.label(what);
-                        });
-                    }
-                    widgets::hint(ui, "Press F1 any time for keyboard shortcuts.");
-                }
             }
             ui.add_space(SP_S * 2.0);
             ui.horizontal(|ui| {
-                // Progress dots.
-                for i in 0..STEPS {
-                    let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
-                    let c = if i == step { pal().accent } else { pal().border_strong };
-                    ui.painter().circle_filled(r.center(), 4.0, c);
-                }
+                progress_dots(ui, step);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let last = step + 1 == STEPS;
-                    let label = if last { "Start mixing" } else { "Next" };
-                    if ui.add(egui::Button::new(RichText::new(label).strong()).fill(pal().accent_bg)).clicked() {
-                        if last {
-                            close = true;
-                        } else {
-                            next = true;
-                        }
+                    if ui.add(egui::Button::new(RichText::new("Next").strong()).fill(pal().accent_bg)).clicked() {
+                        go = Some(1);
                     }
-                    if !last && ui.link("Skip").clicked() {
+                    if step > 0 && ui.button("Back").clicked() {
+                        go = Some(-1);
+                    }
+                    if ui.link("Skip").clicked() {
                         close = true;
                     }
                 });
@@ -144,10 +163,88 @@ impl App {
         });
         if close {
             self.welcome = None;
-        } else if next && let Some(w) = &mut self.welcome {
-            w.step += 1;
+        } else if let Some(d) = go
+            && let Some(w) = &mut self.welcome
+        {
+            w.step = w.step.saturating_add_signed(d);
+            w.since = Instant::now();
+            if w.step + 1 == STEPS {
+                // The last step points at the mixer, so it must be visible.
+                self.tab = super::Tab::Mixer;
+                self.show_sources = true;
+            }
+        }
+    }
+
+    /// Last step: a small card that leaves the mixer usable, so the first
+    /// app can really be dragged onto a strip. Done once something is assigned.
+    fn welcome_coach(&mut self, ctx: &egui::Context) {
+        let assigned = {
+            let sh = self.shared.lock().unwrap();
+            sh.strips.iter().find(|s| s.assigned).map(|s| {
+                let what = s.resolved.first().cloned().or_else(|| s.targets.first().map(|t| t.label()));
+                (s.label.clone().unwrap_or_else(|| s.name.clone()), what.unwrap_or_default())
+            })
+        };
+        let mut close = false;
+        let mut back = false;
+        egui::Window::new("welcome-coach")
+            .title_bar(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -24.0))
+            .frame(egui::Frame::popup(&ctx.global_style()).inner_margin(18).corner_radius(14))
+            .show(ctx, |ui| {
+                ui.set_width(420.0);
+                step_title(ui, 3, "Assign your first app");
+                match &assigned {
+                    Some((strip, what)) => {
+                        ok_line(ui, &format!("{strip} now controls {what}."));
+                        widgets::hint(ui, "Move that fader on your controller and listen.");
+                    }
+                    None => {
+                        ui.label("Drag an app from Sources (on the right) onto a strip, or click a strip's S button.");
+                    }
+                }
+                ui.add_space(4.0);
+                for (k, what) in [
+                    ("S", "lists what a strip controls"),
+                    ("M", "mutes it"),
+                    ("R", "makes a device the default, or starts the app"),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(k).font(mono(13.0)).color(pal().accent));
+                        ui.label(what);
+                    });
+                }
+                widgets::hint(ui, "Press F1 any time for keyboard shortcuts.");
+                ui.add_space(SP_S);
+                ui.horizontal(|ui| {
+                    progress_dots(ui, STEPS - 1);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let label = if assigned.is_some() { "Start mixing" } else { "Later" };
+                        if ui.add(egui::Button::new(RichText::new(label).strong()).fill(pal().accent_bg)).clicked() {
+                            close = true;
+                        }
+                        if ui.button("Back").clicked() {
+                            back = true;
+                        }
+                    });
+                });
+            });
+        if close {
+            self.welcome = None;
+        } else if back && let Some(w) = &mut self.welcome {
+            w.step -= 1;
             w.since = Instant::now();
         }
+    }
+}
+
+fn progress_dots(ui: &mut egui::Ui, step: usize) {
+    for i in 0..STEPS {
+        let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
+        let c = if i == step { pal().accent } else { pal().border_strong };
+        ui.painter().circle_filled(r.center(), 4.0, c);
     }
 }
 

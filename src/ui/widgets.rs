@@ -57,6 +57,47 @@ pub fn bevel_panel(painter: &egui::Painter, rect: Rect, radius: u8, top: Color32
     );
 }
 
+/// Keyboard control of a focused fader or knob: arrows by 2%, Page Up/Down
+/// by 10%, Home/End to the ends. Returns the new position.
+fn keyboard_adjust(ui: &Ui, response: &Response, pos: f32) -> f32 {
+    if !response.has_focus() {
+        return pos;
+    }
+    // Arrows adjust the value here instead of moving focus.
+    ui.memory_mut(|m| {
+        m.set_focus_lock_filter(
+            response.id,
+            egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() },
+        )
+    });
+    ui.input(|i| {
+        use egui::Key;
+        let n = |k| i.num_presses(k) as f32;
+        let mut p = pos + 0.02 * (n(Key::ArrowUp) + n(Key::ArrowRight) - n(Key::ArrowDown) - n(Key::ArrowLeft));
+        p += 0.1 * (n(Key::PageUp) - n(Key::PageDown));
+        if i.key_pressed(Key::Home) {
+            p = 0.0;
+        }
+        if i.key_pressed(Key::End) {
+            p = 1.0;
+        }
+        p
+    })
+}
+
+/// A ring around a widget that has keyboard focus.
+fn focus_ring(ui: &Ui, response: &Response, rect: Rect, radius: f32) {
+    if response.has_focus() {
+        ui.painter().rect_stroke(rect.expand(3.0), radius, Stroke::new(2.0, pal().accent), StrokeKind::Outside);
+    }
+}
+
+/// Accessible name and value of a fader or knob.
+fn slider_info(ui: &Ui, response: &Response, pos: f32, label: &str) {
+    let label = label.to_string();
+    response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), (pos * 100.0).round() as f64, &label));
+}
+
 fn scroll_delta(ui: &Ui, response: &Response) -> f32 {
     if response.hovered() {
         let d = ui.input(|i| i.smooth_scroll_delta.y);
@@ -67,9 +108,10 @@ fn scroll_delta(ui: &Ui, response: &Response) -> f32 {
     0.0
 }
 
-/// Long-throw fader. `pos` is 0..=1. Drag, scroll, double-click for 100%.
-/// `ghost` marks where the hardware fader is while it waits to pick up.
-/// Vertical fader. `marks` are dB labels for the left side: (position, dB).
+/// Long-throw fader. `pos` is 0..=1. Drag, scroll, double-click for 100%,
+/// or focus it and use the keyboard. `ghost` marks where the hardware fader
+/// is while it waits to pick up. `marks` are dB labels for the left side:
+/// (position, dB). `label` names it for screen readers.
 pub fn fader(
     ui: &mut Ui,
     pos: &mut f32,
@@ -77,6 +119,7 @@ pub fn fader(
     color: Color32,
     ghost: Option<f32>,
     marks: &[(f32, i32)],
+    label: &str,
 ) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let cap = vec2(size.x.min(38.0), 20.0);
@@ -94,13 +137,15 @@ pub fn fader(
     if response.double_clicked() {
         *pos = 1.0;
     }
-    *pos = pos.clamp(0.0, 1.0);
+    *pos = keyboard_adjust(ui, &response, *pos).clamp(0.0, 1.0);
     if (*pos - before).abs() > f32::EPSILON {
         response.mark_changed();
     }
+    slider_info(ui, &response, *pos, label);
     // Glide to values that change elsewhere (hardware, other apps); follow the mouse exactly.
     let glide = if response.dragged() { 0.0 } else { 0.08 };
     let shown = theme::anim(ui.ctx(), response.id.with("shown"), *pos, glide);
+    focus_ring(ui, &response, track.expand2(vec2(cap.x / 2.0, cap.y / 2.0)), 6.0);
 
     let painter = ui.painter_at(rect.expand(16.0));
     // Even ticks on the right; dB marks (or the same ticks) on the left.
@@ -191,9 +236,9 @@ fn arc_points(center: Pos2, radius: f32, from: f32, to: f32) -> Vec<Pos2> {
         .collect()
 }
 
-/// Rotary knob with a 270° value ring. Drag vertically or scroll.
-/// `ghost` marks where the hardware knob is while it waits to pick up.
-pub fn knob(ui: &mut Ui, pos: &mut f32, diameter: f32, color: Color32, ghost: Option<f32>) -> Response {
+/// Rotary knob with a 270° value ring. Drag vertically, scroll, or use the
+/// keyboard. `ghost` marks where the hardware knob is while it waits to pick up.
+pub fn knob(ui: &mut Ui, pos: &mut f32, diameter: f32, color: Color32, ghost: Option<f32>, label: &str) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::click_and_drag());
     let before = *pos;
     if response.dragged() {
@@ -206,13 +251,15 @@ pub fn knob(ui: &mut Ui, pos: &mut f32, diameter: f32, color: Color32, ghost: Op
     if response.double_clicked() {
         *pos = 1.0;
     }
-    *pos = pos.clamp(0.0, 1.0);
+    *pos = keyboard_adjust(ui, &response, *pos).clamp(0.0, 1.0);
     if (*pos - before).abs() > f32::EPSILON {
         response.mark_changed();
     }
+    slider_info(ui, &response, *pos, label);
     // Glide to values that change elsewhere (hardware, other apps); follow the mouse exactly.
     let glide = if response.dragged() { 0.0 } else { 0.08 };
     let shown = theme::anim(ui.ctx(), response.id.with("shown"), *pos, glide);
+    focus_ring(ui, &response, rect, diameter / 2.0);
 
     let painter = ui.painter_at(rect.expand(6.0));
     let c = rect.center();
@@ -247,8 +294,12 @@ pub fn knob(ui: &mut Ui, pos: &mut f32, diameter: f32, color: Color32, ghost: Op
 }
 
 /// Square "M/S/R" button with an LED that glows in `color` when `on`.
-pub fn led_button(ui: &mut Ui, label: &str, on: bool, color: Color32, size: Vec2) -> Response {
+/// `name` is what it does, for screen readers ("Mute Fader 1").
+pub fn led_button(ui: &mut Ui, label: &str, on: bool, color: Color32, size: Vec2, name: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let name = name.to_string();
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, &name));
+    focus_ring(ui, &response, rect, 6.0);
     let painter = ui.painter_at(rect.expand(10.0));
     let hot = response.hovered();
     let lit = theme::anim(ui.ctx(), response.id.with("lit"), if on { 1.0 } else { 0.0 }, 0.12);
@@ -474,6 +525,23 @@ pub fn icon_button(ui: &mut Ui, icon: &str, label: &str) -> Response {
     ui.button(egui::RichText::new(text))
 }
 
+/// A button showing only an icon; `label` is its tooltip and its name for
+/// screen readers.
+pub fn icon_only(ui: &mut Ui, icon: &str, label: &str) -> Response {
+    let r = ui.add(egui::Button::new(egui::RichText::new(icon).color(pal().text_dim)).frame(false));
+    let name = label.to_string();
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+    r.on_hover_text(label)
+}
+
+/// Like [`icon_only`], with a button frame.
+pub fn icon_framed(ui: &mut Ui, icon: &str, label: &str) -> Response {
+    let r = ui.button(icon);
+    let name = label.to_string();
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+    r.on_hover_text(label)
+}
+
 /// Hint text in a faint colour.
 pub fn hint(ui: &mut Ui, text: &str) -> Response {
     ui.label(egui::RichText::new(text).size(12.5).color(pal().text_dim))
@@ -500,6 +568,9 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
     for (i, ((v, _), g)) in options.iter().zip(galleys).enumerate() {
         let seg = Rect::from_min_size(pos2(rect.left() + 2.0 + i as f32 * seg_w, rect.top()), vec2(seg_w, size.y));
         let r = ui.interact(seg, response.id.with(i), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let label = options[i].1.to_string();
+        r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, i == selected, &label));
+        focus_ring(ui, &r, seg.shrink(2.0), 6.0);
         if r.clicked() && *value != *v {
             *value = *v;
             response.mark_changed();
@@ -519,6 +590,9 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
 /// Round colour swatch; ringed when selected.
 pub fn swatch(ui: &mut Ui, color: Color32, selected: bool, tooltip: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+    let name = tooltip.to_string();
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, &name));
+    focus_ring(ui, &response, rect.shrink(2.0), 14.0);
     let hot = ui.ctx().animate_bool(response.id, response.hovered() || selected);
     let painter = ui.painter();
     let c = rect.center();
@@ -540,8 +614,11 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         *on = !*on;
         response.mark_changed();
     }
+    let (state, name) = (*on, label.to_string());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, state, &name));
     let t = ui.ctx().animate_bool(response.id, *on);
     let track = Rect::from_min_size(pos2(rect.left(), rect.center().y - sw.y / 2.0), sw);
+    focus_ring(ui, &response, track, 12.0);
     let painter = ui.painter();
     if t > 0.0 {
         glow(painter, track, 10.0, pal().accent.gamma_multiply(0.35 * t), 10.0);

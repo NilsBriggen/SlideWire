@@ -41,6 +41,7 @@ pub enum UiCmd {
     SendTest(String),
     /// Run the action of a group role / spare button as if pressed.
     Press(String),
+    /// Mute every output, or unmute them if they all are.
     MuteAll,
     SetBank(usize),
     /// Move an app's stream to the device with this name.
@@ -1067,9 +1068,11 @@ impl Engine {
                 }
             }
             UiCmd::MuteAll => {
+                // All muted: unmute them; otherwise mute them all.
                 let sh = self.shared.lock().unwrap();
+                let mute = !sh.audio.sinks.iter().all(|d| d.mute);
                 let cmds: Vec<AudioCmd> =
-                    sh.audio.sinks.iter().map(|d| AudioCmd::SetMute(Kind::Sink, d.index, true)).collect();
+                    sh.audio.sinks.iter().map(|d| AudioCmd::SetMute(Kind::Sink, d.index, mute)).collect();
                 drop(sh);
                 for c in cmds {
                     self.audio.send(c);

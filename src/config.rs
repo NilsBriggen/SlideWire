@@ -36,6 +36,12 @@ pub struct Settings {
     pub accent: Accent,
     /// Skip UI animations.
     pub reduce_motion: bool,
+    /// Size of everything in the window (1.0 = 100%).
+    pub ui_scale: f32,
+    /// The window's close button quits instead of hiding to the tray.
+    pub close_quits: bool,
+    /// The "still running in the tray" hint was shown.
+    pub tray_hint_shown: bool,
     /// obs-websocket address and password, for OBS button actions.
     pub obs_url: String,
     pub obs_password: String,
@@ -105,6 +111,9 @@ impl Default for Settings {
             theme: ThemeMode::System,
             accent: Accent::Cyan,
             reduce_motion: false,
+            ui_scale: 1.0,
+            close_quits: false,
+            tray_hint_shown: false,
             obs_url: "ws://localhost:4455".into(),
             obs_password: String::new(),
             buses: Vec::new(),

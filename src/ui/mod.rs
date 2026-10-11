@@ -49,6 +49,8 @@ pub(super) struct Toast {
     color: Option<Color32>,
     born: Instant,
     undo: Option<ToastUndo>,
+    /// Problems stay until dismissed, and can be copied.
+    sticky: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -92,6 +94,8 @@ pub struct App {
     picked: Arc<Mutex<Option<(PickPurpose, PathBuf)>>>,
     toasts: Vec<Toast>,
     welcome: Option<welcome::Welcome>,
+    /// In the welcome: a picked controller that isn't a nanoKONTROL2.
+    welcome_other: Option<String>,
     history: RefCell<history::History>,
     show_shortcuts: bool,
     /// Ctrl+F asked for the sources filter.
@@ -104,6 +108,8 @@ pub struct App {
     source_filter: String,
     /// Name typed for a new bus.
     new_bus: String,
+    /// The zoom factor last applied from settings.
+    zoom: f32,
     log_filter: String,
     log_warnings_only: bool,
     confirm: Option<Confirm>,
@@ -170,6 +176,8 @@ impl App {
             rename: None,
             source_filter: String::new(),
             new_bus: String::new(),
+            welcome_other: None,
+            zoom: 0.0,
             log_filter: String::new(),
             log_warnings_only: false,
             led_test: None,
@@ -190,11 +198,26 @@ impl App {
         self.toast(icon::INFO, msg, None, None);
     }
 
+    /// Something went wrong: an amber toast that stays until dismissed.
+    pub(super) fn problem(&mut self, msg: impl Into<String>) {
+        self.push_toast(Toast {
+            icon: icon::WARNING,
+            text: msg.into(),
+            color: Some(ASSIGN),
+            born: Instant::now(),
+            undo: None,
+            sticky: true,
+        });
+    }
+
     fn toast(&mut self, icon: &'static str, text: impl Into<String>, color: Option<Color32>, undo: Option<ToastUndo>) {
-        let text = text.into();
+        self.push_toast(Toast { icon, text: text.into(), color, born: Instant::now(), undo, sticky: false });
+    }
+
+    fn push_toast(&mut self, toast: Toast) {
         // The same message again just restarts its timer.
-        self.toasts.retain(|t| t.text != text);
-        self.toasts.push(Toast { icon, text, color, born: Instant::now(), undo });
+        self.toasts.retain(|t| t.text != toast.text);
+        self.toasts.push(toast);
         if self.toasts.len() > 4 {
             self.toasts.remove(0);
         }
@@ -264,6 +287,51 @@ impl App {
         }
     }
 
+    /// The size setting and Ctrl+/Ctrl- zoom are the same thing: apply the
+    /// setting when it changes, and save zooming done with the keyboard.
+    fn sync_zoom(&mut self, ctx: &egui::Context, scale: f32) {
+        let scale = scale.clamp(0.5, 3.0);
+        if (scale - self.zoom).abs() > 0.001 {
+            ctx.set_zoom_factor(scale);
+            self.zoom = scale;
+        } else if (ctx.zoom_factor() - self.zoom).abs() > 0.001 {
+            let z = ctx.zoom_factor();
+            self.zoom = z;
+            self.edit_settings(|s| s.ui_scale = z);
+        }
+    }
+
+    /// Empty state for pages that need a profile.
+    pub(super) fn no_profile(&mut self, ui: &mut egui::Ui) {
+        widgets::card(ui, icon::PIANO_KEYS, "No controller profile yet", |ui| {
+            ui.label("A profile says which controls your controller has and what they do.");
+            ui.add_space(SP_S);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(format!("{}  Korg nanoKONTROL2", icon::PLUS)).clicked() {
+                    let id = crate::profile::new_id();
+                    let mut sh = self.shared.lock().unwrap();
+                    sh.store.profiles.insert(id.clone(), Profile::nanokontrol2());
+                    sh.store.touch(&id);
+                    drop(sh);
+                    self.send(UiCmd::ActivateProfile(id));
+                }
+                if ui.button(format!("{}  Import a MIDI Mixer preset", icon::DOWNLOAD_SIMPLE)).clicked() {
+                    self.tab = Tab::Profiles;
+                }
+                if ui.button(format!("{}  Map my own controller", icon::CROSSHAIR)).clicked() {
+                    let id = crate::profile::new_id();
+                    let p = Profile { name: "My controller".into(), ..Default::default() };
+                    let mut sh = self.shared.lock().unwrap();
+                    sh.store.profiles.insert(id.clone(), p);
+                    sh.store.touch(&id);
+                    drop(sh);
+                    self.send(UiCmd::ActivateProfile(id));
+                    self.tab = Tab::Controller;
+                }
+            });
+        });
+    }
+
     /// Change settings from outside the Settings page (buses, routes).
     fn edit_settings(&self, f: impl FnOnce(&mut crate::config::Settings)) {
         f(&mut self.shared.lock().unwrap().store.settings);
@@ -298,7 +366,7 @@ impl App {
                 }
                 Notice::Bank(b) => self.toast(icon::STACK, format!("Bank {}", b + 1), None, None),
                 Notice::Info(t) => self.toast(icon::INFO, t, None, None),
-                Notice::Problem(t) => self.toast(icon::WARNING, t, Some(ASSIGN), None),
+                Notice::Problem(t) => self.problem(t),
                 Notice::SceneRecalled(name) => self.toast(
                     icon::BOOKMARKS_SIMPLE,
                     format!("Scene \"{name}\" recalled"),
@@ -311,12 +379,15 @@ impl App {
 
     fn draw_toasts(&mut self, ctx: &egui::Context) {
         let life = |t: &Toast| Duration::from_secs(if t.undo.is_some() { 7 } else { 4 });
-        self.toasts.retain(|t| t.born.elapsed() < life(t));
+        self.toasts.retain(|t| t.sticky || t.born.elapsed() < life(t));
         if self.toasts.is_empty() {
             return;
         }
         let mut undo = None;
         let mut close = None;
+        let mut copy = None;
+        // Repaint only for fading, and when the next toast is due to go.
+        let mut next_frame = Duration::MAX;
         egui::Area::new(egui::Id::new("toasts"))
             .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-16.0, -16.0))
             .order(egui::Order::Foreground)
@@ -324,9 +395,15 @@ impl App {
                 ui.spacing_mut().item_spacing.y = SP_S;
                 for (i, t) in self.toasts.iter().enumerate() {
                     let age = t.born.elapsed().as_secs_f32();
-                    let left = life(t).as_secs_f32() - age;
+                    let left = if t.sticky { f32::INFINITY } else { life(t).as_secs_f32() - age };
                     // Fade in quickly, fade out over the last 0.3 s.
                     let fade = (age / 0.15).min(1.0).min(left / 0.3).clamp(0.0, 1.0);
+                    let fade = if theme::reduce_motion() { 1.0 } else { fade };
+                    if age < 0.15 || left < 0.3 {
+                        next_frame = next_frame.min(Duration::from_millis(16));
+                    } else if left.is_finite() {
+                        next_frame = next_frame.min(Duration::from_secs_f32(left - 0.3));
+                    }
                     ui.scope(|ui| {
                         ui.multiply_opacity(fade);
                         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
@@ -335,8 +412,8 @@ impl App {
                                 let color = t.color.unwrap_or(pal().accent);
                                 ui.label(RichText::new(t.icon).size(18.0).color(color));
                                 // Leave room for the buttons; long messages wrap.
-                                let room =
-                                    (ui.available_width() - if t.undo.is_some() { 90.0 } else { 34.0 }).max(120.0);
+                                let buttons = if t.undo.is_some() || t.sticky { 90.0 } else { 34.0 };
+                                let room = (ui.available_width() - buttons).max(120.0);
                                 ui.scope(|ui| {
                                     ui.set_max_width(room);
                                     ui.add(egui::Label::new(&t.text).wrap());
@@ -346,7 +423,10 @@ impl App {
                                 {
                                     undo = Some((i, u));
                                 }
-                                if ui.small_button(icon::X).clicked() {
+                                if t.sticky && widgets::icon_framed(ui, icon::COPY, "Copy the message").clicked() {
+                                    copy = Some(t.text.clone());
+                                }
+                                if widgets::icon_framed(ui, icon::X, "Dismiss").clicked() {
                                     close = Some(i);
                                 }
                             });
@@ -354,6 +434,9 @@ impl App {
                     });
                 }
             });
+        if let Some(text) = copy {
+            ctx.copy_text(text);
+        }
         if let Some((i, u)) = undo {
             self.toasts.remove(i);
             match u {
@@ -363,7 +446,9 @@ impl App {
         } else if let Some(i) = close {
             self.toasts.remove(i);
         }
-        ctx.request_repaint_after(Duration::from_millis(50));
+        if next_frame < Duration::MAX {
+            ctx.request_repaint_after(next_frame);
+        }
     }
 
     /// Keyboard shortcuts that work anywhere in the window.
@@ -496,7 +581,7 @@ impl App {
                     match res {
                         Some(Ok(json)) => match std::fs::write(&path, json) {
                             Ok(()) => self.flash(format!("Exported to {}", path.display())),
-                            Err(e) => self.flash(format!("Export failed: {e}")),
+                            Err(e) => self.problem(format!("Export failed: {e}")),
                         },
                         _ => self.flash("Nothing to export"),
                     }
@@ -516,13 +601,18 @@ impl App {
                 sh.audio.connected,
             )
         };
+        // Narrow windows: tabs show only their icon, and less goes on the right.
+        let width = ui.available_width();
+        let icons_only = width < 980.0;
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
+            ui.spacing_mut().item_spacing.x = if icons_only { 4.0 } else { 10.0 };
             if let Some(logo) = &self.logo {
                 ui.add(egui::Image::new(logo).fit_to_exact_size(Vec2::splat(30.0)));
             }
-            ui.label(RichText::new("Slidewire").font(semibold(18.0)));
-            ui.add_space(14.0);
+            if width > 760.0 {
+                ui.label(RichText::new("Slidewire").font(semibold(18.0)));
+            }
+            ui.add_space(if icons_only { 6.0 } else { 14.0 });
 
             let mut underline = None;
             for (t, ic, label) in [
@@ -533,7 +623,7 @@ impl App {
                 (Tab::Settings, icon::GEAR_SIX, "Settings"),
                 (Tab::Log, icon::LIST_BULLETS, "Log"),
             ] {
-                let r = tab_button(ui, ic, label, self.tab == t);
+                let r = tab_button(ui, ic, label, self.tab == t, icons_only);
                 if r.clicked() {
                     self.tab = t;
                 }
@@ -558,9 +648,13 @@ impl App {
                     ui.ctx().request_repaint_after(Duration::from_millis(130));
                 }
                 let (led, text) = match (&connected, &profile) {
+                    (Some(port), Some(_)) if icons_only => {
+                        (if blink { ASSIGN } else { RUN }, crate::midi::display_name(port))
+                    }
                     (Some(port), Some(p)) => {
                         (if blink { ASSIGN } else { RUN }, format!("{p} · {}", crate::midi::display_name(port)))
                     }
+                    (None, Some(_)) if icons_only => (MUTE, "Not connected".into()),
                     (None, Some(p)) => (MUTE, format!("{p} · not connected")),
                     _ => (pal().text_faint, "No profile".into()),
                 };
@@ -575,7 +669,7 @@ impl App {
                 if !pulse {
                     widgets::pill(ui, Some(MUTE), "Audio server offline");
                 }
-                if !focus.class.is_empty() {
+                if !focus.class.is_empty() && width > 1200.0 {
                     widgets::pill(ui, None, &format!("{}  {}", icon::CROSSHAIR, focus.class))
                         .on_hover_text("Focused app");
                 }
@@ -631,16 +725,23 @@ impl App {
 }
 
 /// Page switcher button: icon + label, tinted when selected.
-fn tab_button(ui: &mut egui::Ui, ic: &str, label: &str, selected: bool) -> egui::Response {
-    let text = format!("{ic}  {label}");
-    let galley = ui.painter().layout_no_wrap(text, egui::FontId::proportional(14.0), pal().text);
+/// A page tab; `icon_only` on narrow windows (the label becomes a tooltip).
+fn tab_button(ui: &mut egui::Ui, ic: &str, label: &str, selected: bool, icon_only: bool) -> egui::Response {
+    let text = if icon_only { ic.to_string() } else { format!("{ic}  {label}") };
+    let galley =
+        ui.painter().layout_no_wrap(text, egui::FontId::proportional(if icon_only { 17.0 } else { 14.0 }), pal().text);
     let size = galley.size() + vec2(20.0, 14.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let name = label.to_string();
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &name));
     let hot = response.hovered();
     if selected {
         ui.painter().rect_filled(rect, 6.0, theme::mix(pal().panel_deep, pal().accent, 0.12));
     } else if hot {
         ui.painter().rect_filled(rect, 6.0, pal().control);
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(rect, 6.0, Stroke::new(2.0, pal().accent), egui::StrokeKind::Inside);
     }
     let color = if selected {
         pal().accent
@@ -650,7 +751,8 @@ fn tab_button(ui: &mut egui::Ui, ic: &str, label: &str, selected: bool) -> egui:
         pal().text_dim
     };
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if icon_only { response.on_hover_text(label) } else { response }
 }
 
 impl App {
@@ -715,7 +817,7 @@ impl App {
                 self.send(UiCmd::ActivateProfile(id));
                 self.import_path.clear();
             }
-            Err(e) => self.flash(format!("Import failed: {e:#}")),
+            Err(e) => self.problem(format!("Import failed: {e:#}")),
         }
     }
 }
@@ -735,6 +837,7 @@ impl eframe::App for App {
         self.handle_window_cmds(&ctx);
         let settings = self.shared.lock().unwrap().store.settings.clone();
         theme::sync(&ctx, &settings);
+        self.sync_zoom(&ctx, settings.ui_scale);
         self.shortcuts(&ctx);
 
         egui::Panel::top("top")

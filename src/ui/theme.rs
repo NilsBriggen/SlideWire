@@ -113,7 +113,7 @@ const DARK: Palette = Palette {
     text: Color32::from_rgb(0xdc, 0xde, 0xe6),
     text_strong: Color32::WHITE,
     text_dim: Color32::from_rgb(0x94, 0x98, 0xa6),
-    text_faint: Color32::from_rgb(0x5a, 0x5e, 0x6b),
+    text_faint: Color32::from_rgb(0x76, 0x7a, 0x88),
     tick: Color32::from_rgb(0x3a, 0x3d, 0x48),
     accent: Color32::from_rgb(0x4c, 0xc9, 0xf0),
     accent_bg: Color32::from_rgb(0x1f, 0x5f, 0x78),
@@ -140,7 +140,7 @@ const LIGHT: Palette = Palette {
     text: Color32::from_rgb(0x1b, 0x1e, 0x25),
     text_strong: Color32::BLACK,
     text_dim: Color32::from_rgb(0x55, 0x5b, 0x6a),
-    text_faint: Color32::from_rgb(0x8c, 0x92, 0xa0),
+    text_faint: Color32::from_rgb(0x76, 0x7c, 0x8c),
     tick: Color32::from_rgb(0xb4, 0xb9, 0xc4),
     accent: Color32::from_rgb(0x0a, 0x7e, 0xa8),
     accent_bg: Color32::from_rgb(0xcf, 0xea, 0xf4),
@@ -197,6 +197,11 @@ static MOTION: AtomicBool = AtomicBool::new(true);
 pub fn anim(ctx: &egui::Context, id: egui::Id, target: f32, secs: f32) -> f32 {
     let secs = if MOTION.load(Ordering::Relaxed) { secs } else { 0.0 };
     ctx.animate_value_with_time(id, target, secs)
+}
+
+/// The user turned animations off.
+pub fn reduce_motion() -> bool {
+    !MOTION.load(Ordering::Relaxed)
 }
 
 /// The active palette.
@@ -360,6 +365,8 @@ mod tests {
                 for bg in [p.card, p.panel, p.strip_top, p.strip_bottom] {
                     assert!(contrast(p.text, bg) >= 7.0, "text, dark={dark}");
                     assert!(contrast(p.text_dim, bg) >= 4.5, "text_dim, dark={dark}");
+                    // Scale labels and placeholders: the 3:1 of non-text UI.
+                    assert!(contrast(p.text_faint, bg) >= 3.0, "text_faint on {bg:?}, dark={dark}");
                     for c in [p.readout, p.mute_text, p.warn_text] {
                         assert!(contrast(c, bg) >= 4.5, "{c:?} on {bg:?}, dark={dark}");
                     }
