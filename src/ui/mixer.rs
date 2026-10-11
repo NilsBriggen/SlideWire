@@ -379,6 +379,10 @@ impl App {
         if s.peak >= e.0 || now - e.1 > 1.5 {
             *e = (s.peak, now);
         }
+        if e.0 > s.peak {
+            // Let the held line drop once its time is up.
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((e.1 + 1.55 - now).max(0.0)));
+        }
         e.0
     }
 
@@ -445,7 +449,7 @@ impl App {
         ui.menu_button(format!("{}  Application", icon::MUSIC_NOTES), |ui| {
             let mut seen = HashSet::new();
             for a in &audio.apps {
-                let pattern = if a.binary.is_empty() { a.app_name.clone() } else { a.binary.clone() };
+                let pattern = a.pattern();
                 if pattern.is_empty() || !seen.insert(pattern.clone()) {
                     continue;
                 }
@@ -464,7 +468,7 @@ impl App {
         ui.menu_button(format!("{}  Application recording", icon::MICROPHONE), |ui| {
             let mut seen = HashSet::new();
             for a in &audio.app_inputs {
-                let pattern = if a.binary.is_empty() { a.app_name.clone() } else { a.binary.clone() };
+                let pattern = a.pattern();
                 if pattern.is_empty() || !seen.insert(pattern.clone()) {
                     continue;
                 }
@@ -545,7 +549,7 @@ impl App {
                     widgets::hint(ui, "Nothing is playing.");
                 }
                 for a in &audio.apps {
-                    let pattern = if a.binary.is_empty() { a.app_name.clone() } else { a.binary.clone() };
+                    let pattern = a.pattern();
                     let target = Target::App { m: AppMatch { pattern, regex: false }, label: a.display_name() };
                     let hints = vec![a.icon.clone(), a.binary.clone(), a.app_name.clone()];
                     let sub =
@@ -572,7 +576,7 @@ impl App {
             if !audio.app_inputs.is_empty() {
                 widgets::card(ui, icon::MICROPHONE, "Recording", |ui| {
                     for a in &audio.app_inputs {
-                        let pattern = if a.binary.is_empty() { a.app_name.clone() } else { a.binary.clone() };
+                        let pattern = a.pattern();
                         let target =
                             Target::AppInput { m: AppMatch { pattern, regex: false }, label: a.display_name() };
                         let hints = vec![a.icon.clone(), a.binary.clone(), a.app_name.clone()];

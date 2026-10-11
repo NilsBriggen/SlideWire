@@ -67,7 +67,7 @@ impl AppStream {
     pub fn display_name(&self) -> String {
         // Electron/Chromium apps and ALSA clients report a generic name; the
         // binary says more (e.g. "vesktop" instead of "Chromium").
-        let generic = self.app_name.is_empty()
+        let generic = self.app_name.trim().is_empty()
             || self.app_name == "Chromium"
             || self.app_name.starts_with("ALSA plug-in")
             || self.app_name == "WEBRTC VoiceEngine";
@@ -75,11 +75,24 @@ impl AppStream {
             self.app_name.clone()
         } else if !self.binary.is_empty() {
             capitalize(&self.binary)
-        } else if !self.app_name.is_empty() {
+        } else if !self.app_name.trim().is_empty() {
             self.app_name.clone()
-        } else {
+        } else if !self.media_name.trim().is_empty() {
             self.media_name.clone()
+        } else {
+            format!("Unknown app #{}", self.index)
         }
+    }
+
+    /// What an assignment matches on: the binary when known, since it's
+    /// stable, else the app or stream name. Never empty, because an empty
+    /// pattern would match every app.
+    pub fn pattern(&self) -> String {
+        [&self.binary, &self.app_name, &self.media_name]
+            .into_iter()
+            .find(|s| !s.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| self.display_name())
     }
 }
 
@@ -632,6 +645,17 @@ mod tests {
         assert_eq!(repair_text("Café Radio"), "Café Radio");
         assert_eq!(repair_text("Firefox"), "Firefox");
         assert_eq!(repair_text("ÄÖÜ"), "ÄÖÜ");
+    }
+
+    #[test]
+    fn app_names_never_empty() {
+        let a = AppStream { index: 7, app_name: " ".into(), ..Default::default() };
+        assert_eq!(a.display_name(), "Unknown app #7");
+        assert!(!a.pattern().trim().is_empty());
+        let a = AppStream { app_name: "Chromium".into(), binary: "vesktop".into(), ..Default::default() };
+        assert_eq!((a.display_name().as_str(), a.pattern().as_str()), ("Vesktop", "vesktop"));
+        let a = AppStream { media_name: "audio stream #1".into(), ..Default::default() };
+        assert_eq!((a.display_name().as_str(), a.pattern().as_str()), ("audio stream #1", "audio stream #1"));
     }
 
     #[test]

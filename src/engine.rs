@@ -901,7 +901,7 @@ impl Engine {
             let stream = sh.audio.apps.iter().find(|a| self.related_to_focus_uncached(pid, a)).cloned();
             let (pattern, label) = match stream {
                 Some(a) => {
-                    let pat = if !a.binary.is_empty() { a.binary.clone() } else { a.app_name.clone() };
+                    let pat = a.pattern();
                     (pat, a.display_name())
                 }
                 None if !self.focus_binary.is_empty() => (self.focus_binary.clone(), focus.class.clone()),

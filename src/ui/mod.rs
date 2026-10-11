@@ -31,10 +31,11 @@ enum Tab {
     Log,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum PickPurpose {
     Import,
-    Export,
+    /// Export the profile with this id.
+    Export(String),
 }
 
 pub struct App {
@@ -132,7 +133,7 @@ impl App {
             let mut cmd = std::process::Command::new("kdialog");
             match purpose {
                 PickPurpose::Import => cmd.args(["--getopenfilename", ".", "*.json|Profiles (*.json)"]),
-                PickPurpose::Export => cmd.args(["--getsavefilename", "profile.json", "*.json|Profiles (*.json)"]),
+                PickPurpose::Export(_) => cmd.args(["--getsavefilename", "profile.json", "*.json|Profiles (*.json)"]),
             };
             if let Ok(out) = cmd.output() {
                 let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -160,8 +161,8 @@ impl App {
         if let Some((purpose, path)) = picked {
             match purpose {
                 PickPurpose::Import => self.import_path = path.display().to_string(),
-                PickPurpose::Export => {
-                    let res = self.shared.lock().unwrap().active().map(|p| p.to_spec_json());
+                PickPurpose::Export(id) => {
+                    let res = self.shared.lock().unwrap().store.profiles.get(&id).map(|p| p.to_spec_json());
                     match res {
                         Some(Ok(json)) => match std::fs::write(&path, json) {
                             Ok(()) => self.flash(format!("Exported to {}", path.display())),
@@ -367,7 +368,8 @@ impl eframe::App for App {
         );
         self.doctor_window(&ctx);
 
-        // Meters and the activity LEDs animate; keep frames coming while visible.
-        ctx.request_repaint_after(Duration::from_millis(250));
+        // Everything that moves asks for its own frames (engine events, meter
+        // peaks, blinks); this slow floor only catches anything that didn't.
+        ctx.request_repaint_after(Duration::from_secs(2));
     }
 }

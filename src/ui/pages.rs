@@ -216,10 +216,8 @@ impl App {
                 }
             }
             "export" => {
-                sh.store.settings.active_profile = Some(arg.clone());
                 drop(sh);
-                self.send(UiCmd::ActivateProfile(arg));
-                self.pick_file(PickPurpose::Export);
+                self.pick_file(PickPurpose::Export(arg));
             }
             "delete" => {
                 sh.store.delete_profile(&arg);
@@ -263,7 +261,7 @@ impl App {
             let sh = self.shared.lock().unwrap();
             (sh.store.settings.clone(), sh.ports_out.clone())
         };
-        let before = serde_json::to_string(&s).unwrap_or_default();
+        let before = s.clone();
         ui.label(RichText::new("Settings").font(semibold(17.0)));
         ui.add_space(8.0);
         let wide = ui.available_width() > 1000.0;
@@ -292,7 +290,7 @@ impl App {
                 self.about_card(ui);
             }
         });
-        if serde_json::to_string(&s).unwrap_or_default() != before {
+        if s != before {
             self.shared.lock().unwrap().store.settings = s;
             self.send(UiCmd::ProfileEdited);
         }
