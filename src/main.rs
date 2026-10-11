@@ -183,6 +183,7 @@ fn main() {
         std::thread::spawn(config::migrate_desktop_files);
     }
     let mut store = config::Store::load();
+    i18n::apply(&store.settings.language);
     minimized |= store.settings.start_minimized;
     let warnings = std::mem::take(&mut store.warnings);
     let shared = Arc::new(Mutex::new(Shared {

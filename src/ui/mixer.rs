@@ -79,7 +79,17 @@ impl App {
             ))
         };
         // Narrow: the buttons on the right lose their labels so the bank tabs fit.
-        let compact = ui.available_width() < 560.0 + 72.0 * bank_count as f32;
+        // Measured in the current language: some need far more room.
+        let text_w = |ui: &egui::Ui, text: &str, font: egui::FontId| {
+            ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), font, egui::Color32::WHITE).size().x)
+        };
+        let body = egui::FontId::proportional(14.0);
+        let sources_label = if self.show_sources { t!("Hide sources") } else { t!("Show sources") };
+        let buttons = text_w(ui, &t!("Scenes"), body.clone()) + text_w(ui, &sources_label, body.clone()) + 110.0;
+        let tabs = bank_count as f32 * (text_w(ui, &t!("Bank %{bank}", bank = 9), body.clone()) + 22.0) + 40.0;
+        let title = text_w(ui, &t!("Console"), semibold(17.0)) + 14.0;
+        let compact = ui.available_width() < title + tabs + buttons + 70.0;
+        self.header_buttons_w = if compact { 90.0 } else { buttons };
         ui.horizontal(|ui| {
             if !compact {
                 ui.label(RichText::new(t!("Console")).font(semibold(17.0)));
@@ -192,7 +202,7 @@ impl App {
             });
         }
         // Leave room for the Scenes and Sources buttons on the right.
-        let room = ui.available_width() - 290.0;
+        let room = ui.available_width() - self.header_buttons_w - 20.0;
         if count == 1 && room > 160.0 {
             ui.scope(|ui| {
                 ui.set_max_width(room);
@@ -1205,19 +1215,21 @@ impl App {
                 });
                 ui.add_space(4.0);
             }
-            ui.horizontal(|ui| {
-                let r = ui.add(
-                    egui::TextEdit::singleline(&mut self.new_bus)
-                        .hint_text(t!("New bus, e.g. Game"))
-                        .desired_width(ui.available_width() - 70.0),
-                );
+            // Button first (right to left), so the field gets what's left
+            // however long "Add" is in this language.
+            let row = vec2(ui.available_width(), ui.spacing().interact_size.y);
+            ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let name = self.new_bus.trim().to_string();
                 let new = Bus { name: name.clone(), output: None };
                 let ok = !name.is_empty() && !buses.iter().any(|b| b.sink_name() == new.sink_name());
+                let add = ui.add_enabled(ok, egui::Button::new(format!("{}  {}", icon::PLUS, t!("Add")))).clicked();
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut self.new_bus)
+                        .hint_text(t!("New bus, e.g. Game"))
+                        .desired_width(ui.available_width()),
+                );
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (ui.add_enabled(ok, egui::Button::new(format!("{}  {}", icon::PLUS, t!("Add")))).clicked() || enter)
-                    && ok
-                {
+                if (add || enter) && ok {
                     self.edit_settings(|s| s.buses.push(new));
                     self.new_bus.clear();
                 }

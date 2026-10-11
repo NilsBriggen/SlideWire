@@ -111,6 +111,10 @@ pub struct App {
     new_bus: String,
     /// The zoom factor last applied from settings.
     zoom: f32,
+    /// The language setting last applied.
+    language: Option<String>,
+    /// Width of the Scenes and Sources buttons in the console header.
+    header_buttons_w: f32,
     /// The page on screen and since when (it fades in).
     shown_tab: Tab,
     tab_since: Instant,
@@ -137,7 +141,7 @@ impl App {
         events: Sender<Event>,
         window: Receiver<WindowCmd>,
     ) -> App {
-        theme::install(&cc.egui_ctx);
+        theme::install(&cc.egui_ctx, crate::i18n::cjk());
         let ctx = cc.egui_ctx.clone();
         crate::appearance::watch(move || ctx.request_repaint());
         egui_extras::install_image_loaders(&cc.egui_ctx);
@@ -182,6 +186,8 @@ impl App {
             new_bus: String::new(),
             welcome_other: None,
             zoom: 0.0,
+            language: None,
+            header_buttons_w: 290.0,
             shown_tab: Tab::Mixer,
             tab_since: Instant::now(),
             log_filter: String::new(),
@@ -304,6 +310,22 @@ impl App {
             Tab::Settings => self.settings(ui),
             Tab::Log => self.log(ui),
         }
+    }
+
+    /// Switch language when the setting changes; CJK languages need a font.
+    fn sync_language(&mut self, ctx: &egui::Context, language: &str) {
+        if self.language.as_deref() == Some(language) {
+            return;
+        }
+        let first = self.language.is_none();
+        self.language = Some(language.to_string());
+        crate::i18n::apply(language);
+        let cjk = crate::i18n::cjk();
+        if cjk.is_some() || !first {
+            // Keep a CJK font that's already loaded (the picker loads one).
+            theme::install(ctx, cjk.or(theme::loaded_cjk().as_deref()));
+        }
+        ctx.request_repaint();
     }
 
     /// The size setting and Ctrl+/Ctrl- zoom are the same thing: apply the
@@ -861,6 +883,7 @@ impl eframe::App for App {
         let settings = self.shared.lock().unwrap().store.settings.clone();
         theme::sync(&ctx, &settings);
         self.sync_zoom(&ctx, settings.ui_scale);
+        self.sync_language(&ctx, &settings.language);
         self.shortcuts(&ctx);
 
         egui::Panel::top("top")

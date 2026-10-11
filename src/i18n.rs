@@ -3,17 +3,56 @@
 //! `scripts/i18n-extract.py` collects the keys into `locales/en.json`; other
 //! languages are `locales/<lang>.json` with the same keys.
 
-/// Use the desktop's language, if we have it.
-pub fn init() {
+/// Languages we have, by their own names, for the language picker.
+pub const LANGUAGES: &[(&str, &str)] = &[
+    ("en", "English"),
+    ("de", "Deutsch"),
+    ("gsw", "Bärndütsch"),
+    ("fr", "Français"),
+    ("es", "Español"),
+    ("it", "Italiano"),
+    ("pt-BR", "Português (Brasil)"),
+    ("pl", "Polski"),
+    ("hu", "Magyar"),
+    ("ru", "Русский"),
+    ("zh-CN", "简体中文"),
+    ("ja", "日本語"),
+    ("ko", "한국어"),
+];
+
+/// The desktop's language as a tag: "de_CH.UTF-8" -> "de-CH".
+fn desktop_language() -> String {
     let lang = ["LC_ALL", "LC_MESSAGES", "LANG"]
         .iter()
         .filter_map(|v| std::env::var(v).ok())
         .find(|v| !v.is_empty() && v != "C" && v != "POSIX")
         .unwrap_or_default();
-    // "de_CH.UTF-8" -> "de-CH"; rust-i18n falls back to "de", then English.
-    let tag = lang.split(['.', '@']).next().unwrap_or_default().replace('_', "-");
-    if !tag.is_empty() {
-        rust_i18n::set_locale(&tag);
+    lang.split(['.', '@']).next().unwrap_or_default().replace('_', "-")
+}
+
+/// Use the desktop's language, until the settings say otherwise.
+pub fn init() {
+    apply("");
+}
+
+/// Switch to `choice` (a tag from [`LANGUAGES`]), or the desktop's language
+/// when it's empty. rust-i18n falls back from "de-CH" to "de", then English.
+pub fn apply(choice: &str) {
+    let tag = if choice.is_empty() { desktop_language() } else { choice.to_string() };
+    rust_i18n::set_locale(if tag.is_empty() { "en" } else { &tag });
+}
+
+/// The language to load a CJK font for, if the current one needs it.
+pub fn cjk() -> Option<&'static str> {
+    let l = rust_i18n::locale().to_lowercase();
+    if l.starts_with("zh") {
+        Some(if l.contains("tw") || l.contains("hk") { "zh-tw" } else { "zh-cn" })
+    } else if l.starts_with("ja") {
+        Some("ja")
+    } else if l.starts_with("ko") {
+        Some("ko")
+    } else {
+        None
     }
 }
 
@@ -84,6 +123,14 @@ mod tests {
             }
         }
         assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    #[test]
+    fn translations_are_compiled_in() {
+        let de = rust_i18n::t!("Hide sources", locale = "de");
+        assert_ne!(de, "Hide sources", "locales/de.json isn't in the binary");
+        // A regional variant falls back to the language.
+        assert_eq!(rust_i18n::t!("Hide sources", locale = "de-CH"), de);
     }
 
     #[test]

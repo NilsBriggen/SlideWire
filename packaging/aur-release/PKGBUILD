@@ -18,7 +18,7 @@ optdepends=(
 )
 conflicts=(slidewire-git)
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=(SKIP)
+sha256sums=('b577b733d5227d10753effef9637baf5bf1d7f1ccccfe847004c9ed57218d830')
 
 prepare() {
   cd "$pkgname"

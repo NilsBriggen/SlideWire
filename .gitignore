@@ -9,3 +9,7 @@
 /packaging/aur/*.pkg.tar.*
 /dist
 /.claude/
+/packaging/aur-release/pkg/
+/packaging/aur-release/src/
+/packaging/aur-release/*.pkg.tar.*
+/packaging/aur-release/*.tar.gz

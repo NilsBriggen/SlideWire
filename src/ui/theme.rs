@@ -266,7 +266,11 @@ pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
 
-pub fn install(ctx: &egui::Context) {
+/// Set up our fonts. `cjk` (a fontconfig language such as "ja") adds the
+/// system's font for it as a fallback: ours have no Chinese, Japanese or
+/// Korean characters.
+pub fn install(ctx: &egui::Context, cjk: Option<&str>) {
+    *CJK.lock().unwrap() = cjk.map(String::from);
     let mut fonts = FontDefinitions::default();
     fonts
         .font_data
@@ -293,8 +297,45 @@ pub fn install(ctx: &egui::Context) {
     if let Some(f) = fonts.families.get_mut(&FontFamily::Monospace) {
         f.insert(1, "phosphor".into());
     }
+    if let Some(data) = cjk.and_then(system_font) {
+        fonts.font_data.insert("cjk".into(), data.into());
+        for f in fonts.families.values_mut() {
+            f.push("cjk".into());
+        }
+    }
     ctx.set_fonts(fonts);
     apply_visuals(ctx, &pal());
+}
+
+/// The CJK fallback font loaded, if any.
+static CJK: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn loaded_cjk() -> Option<String> {
+    CJK.lock().unwrap().clone()
+}
+
+/// Make sure Chinese, Japanese and Korean characters can be drawn (for the
+/// language names in the language picker).
+pub fn ensure_cjk(ctx: &egui::Context) {
+    if CJK.lock().unwrap().is_none() {
+        install(ctx, Some("zh-cn"));
+    }
+}
+
+/// The desktop's sans-serif font for `lang`, found with fontconfig.
+fn system_font(lang: &str) -> Option<FontData> {
+    let out = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}\n%{index}", &format!("sans-serif:lang={lang}")])
+        .output()
+        .ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    let mut lines = text.lines();
+    let file = lines.next()?;
+    let index: u32 = lines.next().and_then(|i| i.trim().parse().ok()).unwrap_or(0);
+    let bytes = std::fs::read(file).ok()?;
+    let mut data = FontData::from_owned(bytes);
+    data.index = index;
+    Some(data)
 }
 
 fn apply_visuals(ctx: &egui::Context, p: &Palette) {

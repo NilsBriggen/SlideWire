@@ -560,7 +560,7 @@ impl App {
                 });
             }
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let running = self.led_test.is_some();
                 let text = if running { t!("Testing…") } else { t!("Test LEDs") };
                 if ui.add_enabled(!running, egui::Button::new(format!("{}  {text}", icon::LIGHTBULB))).clicked() {
@@ -834,7 +834,7 @@ fn action_editor(
     match action {
         ButtonAction::None => {}
         ButtonAction::Media { key, player } => {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for (k, l) in [
                     (MediaKey::PlayPause, format!("{}  {}", icon::PLAY_PAUSE, t!("Play/Pause"))),
                     (MediaKey::Stop, format!("{}  {}", icon::STOP, t!("Stop"))),
@@ -1095,6 +1095,21 @@ const REPO: &str = "https://git.briggen.dev/NilsBriggen/SlideWire";
 fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
     use crate::config::{Accent, ThemeMode};
     widgets::card(ui, icon::PALETTE, &t!("Appearance"), |ui| {
+        ui.horizontal(|ui| {
+            ui.label(t!("Language"));
+            ui.add_space(SP_S);
+            let current = crate::i18n::LANGUAGES
+                .iter()
+                .find(|(tag, _)| *tag == s.language)
+                .map_or_else(|| t!("Automatic").to_string(), |(_, name)| name.to_string());
+            widgets::combo("language").selected_text(current).width(200.0).show_ui(ui, |ui| {
+                theme::ensure_cjk(ui.ctx());
+                ui.selectable_value(&mut s.language, String::new(), t!("Automatic (desktop language)"));
+                for (tag, name) in crate::i18n::LANGUAGES {
+                    ui.selectable_value(&mut s.language, tag.to_string(), *name);
+                }
+            });
+        });
         ui.horizontal(|ui| {
             ui.label(t!("Theme"));
             ui.add_space(SP_S);
