@@ -101,6 +101,8 @@ pub struct Store {
     pub profiles: IndexMap<String, Profile>,
     /// Problems found while loading, for the log.
     pub warnings: Vec<String>,
+    /// There were no settings yet: show the welcome.
+    pub first_run: bool,
 }
 
 impl Store {
@@ -121,6 +123,7 @@ impl Store {
         let _ = std::fs::create_dir_all(dir.join("profiles"));
         let mut warnings = Vec::new();
         let settings_path = dir.join("settings.json");
+        let first_run = !settings_path.exists();
         let settings = match std::fs::read_to_string(&settings_path) {
             Err(_) => Settings::default(),
             Ok(text) => match serde_json::from_str(&text) {
@@ -152,7 +155,7 @@ impl Store {
                 }
             }
         }
-        let mut store = Store { dir, settings, profiles, warnings };
+        let mut store = Store { dir, settings, profiles, warnings, first_run };
         if store.profiles.is_empty() {
             let id = crate::profile::new_id();
             store.profiles.insert(id.clone(), Profile::nanokontrol2());

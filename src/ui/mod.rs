@@ -7,6 +7,7 @@ mod icons;
 mod mixer;
 mod pages;
 mod theme;
+mod welcome;
 mod widgets;
 
 use std::cell::RefCell;
@@ -83,6 +84,7 @@ pub struct App {
     import_path: String,
     picked: Arc<Mutex<Option<(PickPurpose, PathBuf)>>>,
     toasts: Vec<Toast>,
+    welcome: Option<welcome::Welcome>,
     history: RefCell<history::History>,
     show_shortcuts: bool,
     /// Ctrl+F asked for the sources filter.
@@ -127,6 +129,7 @@ impl App {
         }
         let _ = events.send(Event::Ui(UiCmd::ProfileEdited));
         let logo = egui::ColorImage::from_rgba_unmultiplied([64, 64], &crate::icon::rgba(64));
+        let first_run = shared.lock().unwrap().store.first_run;
         App {
             shared,
             events,
@@ -147,6 +150,7 @@ impl App {
             import_path: String::new(),
             picked: Arc::default(),
             toasts: Vec::new(),
+            welcome: (first_run || crate::config::env("TAB").as_deref() == Some("welcome")).then(welcome::Welcome::new),
             history: RefCell::default(),
             show_shortcuts: false,
             want_filter: false,
@@ -672,6 +676,7 @@ impl eframe::App for App {
         self.doctor_window(&ctx);
         self.confirm_dialog(&ctx);
         self.shortcuts_window(&ctx);
+        self.welcome_window(&ctx);
         self.take_notices();
         self.draw_toasts(&ctx);
 
