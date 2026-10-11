@@ -40,10 +40,25 @@ OPTIONS:
     --doctor [PATTERN]   check why a controller doesn't show up (default: nanoKONTROL2)
     --install-icon       install the icon and a desktop entry for the current user
     -h, --help           show this help
+
+CONTROL THE RUNNING APP (for scripts and keyboard shortcuts):
+    slidewire strips                     list strips with volume and assignment
+    slidewire set STRIP 50|+5|-5         set or change a strip's volume (percent)
+    slidewire mute STRIP [on|off|toggle]
+    slidewire bank N                     switch to bank N
+    slidewire scene NAME                 recall a scene
+  STRIP is a strip name like \"Knob 3\", or a number for that fader.
 ";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| ["strips", "set", "mute", "bank", "scene"].contains(&a.as_str())) {
+        if let Err(e) = dbus::remote(&args) {
+            eprintln!("{e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let mut minimized = false;
     let mut i = 0;
     while i < args.len() {
@@ -138,6 +153,7 @@ fn main() {
     for w in warnings {
         shared.lock().unwrap().log(w);
     }
+    let _ = dbus::SHARED.set(shared.clone());
 
     let test_instance = crate::config::env("INSTANCE").is_some();
     if let Some(conn) = bus.as_ref().filter(|_| !test_instance)

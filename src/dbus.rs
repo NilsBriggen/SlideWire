@@ -7,8 +7,30 @@ use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
 use zbus::blocking::Connection;
 
-use crate::engine::{Event, FocusInfo};
+use crate::engine::{Event, FocusInfo, SharedRef, UiCmd};
 use crate::profile::MediaKey;
+
+/// The app state, for the scripting methods (set once the engine exists).
+pub static SHARED: std::sync::OnceLock<SharedRef> = std::sync::OnceLock::new();
+
+fn failed(msg: impl Into<String>) -> zbus::fdo::Error {
+    zbus::fdo::Error::Failed(msg.into())
+}
+
+/// Find a strip by its name ("Fader 1", case-insensitive) or channel number
+/// ("1" = "Fader 1"). Returns the group id and the strip's current state.
+fn find_strip(name: &str) -> zbus::fdo::Result<crate::engine::StripView> {
+    let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
+    let strips = shared.lock().unwrap().strips.clone();
+    let want = name.trim().to_lowercase();
+    let by_number = format!("fader {want}");
+    strips
+        .iter()
+        .find(|s| s.name.to_lowercase() == want)
+        .or_else(|| strips.iter().find(|s| s.name.to_lowercase() == by_number))
+        .cloned()
+        .ok_or_else(|| failed(format!("no strip called \"{name}\" (see `slidewire strips`)")))
+}
 
 pub const BUS_NAME: &str = "dev.slidewire.Slidewire";
 const PATH: &str = "/dev/slidewire/Slidewire";
@@ -34,6 +56,69 @@ impl Service {
     fn show(&self) {
         let _ = self.tx.send(Event::ShowWindow);
     }
+
+    /// Every strip: name, volume in percent, muted, what it controls.
+    fn strips(&self) -> zbus::fdo::Result<Vec<(String, f64, bool, String)>> {
+        let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
+        let strips = shared.lock().unwrap().strips.clone();
+        Ok(strips
+            .into_iter()
+            .map(|s| {
+                let what = if s.resolved.is_empty() {
+                    s.targets.iter().map(|t| t.label()).collect::<Vec<_>>().join(" + ")
+                } else {
+                    s.resolved.join(" + ")
+                };
+                (s.name, (s.position * 100.0).round() as f64, s.muted, what)
+            })
+            .collect())
+    }
+
+    /// Set a strip to `percent` (0-100), or change it by `percent` if `relative`.
+    fn set_volume(&self, strip: String, percent: f64, relative: bool) -> zbus::fdo::Result<f64> {
+        let s = find_strip(&strip)?;
+        let target = if relative { s.position as f64 * 100.0 + percent } else { percent };
+        let pos = (target / 100.0).clamp(0.0, 1.0) as f32;
+        let _ = self.tx.send(Event::Ui(UiCmd::SetGroupPosition(s.id, pos)));
+        Ok((pos * 100.0).round() as f64)
+    }
+
+    /// `mode`: "toggle", "on" or "off". Returns whether the strip is now muted.
+    fn mute(&self, strip: String, mode: String) -> zbus::fdo::Result<bool> {
+        let s = find_strip(&strip)?;
+        if s.resolved.is_empty() {
+            return Err(failed(format!("{} has nothing to mute", s.name)));
+        }
+        let want = match mode.as_str() {
+            "on" => true,
+            "off" => false,
+            "toggle" | "" => !s.muted,
+            other => return Err(failed(format!("mute mode must be on, off or toggle, not \"{other}\""))),
+        };
+        if want != s.muted {
+            let _ = self.tx.send(Event::Ui(UiCmd::ToggleGroupMute(s.id)));
+        }
+        Ok(want)
+    }
+
+    /// Switch to bank `bank` (1 = first).
+    fn bank(&self, bank: u32) -> zbus::fdo::Result<()> {
+        if bank == 0 {
+            return Err(failed("banks start at 1"));
+        }
+        let _ = self.tx.send(Event::Ui(UiCmd::SetBank(bank as usize - 1)));
+        Ok(())
+    }
+
+    fn scene(&self, name: String) -> zbus::fdo::Result<()> {
+        let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
+        let exists = shared.lock().unwrap().active().is_some_and(|p| p.scenes.contains_key(&name));
+        if !exists {
+            return Err(failed(format!("no scene called \"{name}\"")));
+        }
+        let _ = self.tx.send(Event::Ui(UiCmd::RecallScene(name)));
+        Ok(())
+    }
 }
 
 /// Test instances (`SLIDEWIRE_INSTANCE=x`) get their own bus name so they
@@ -45,6 +130,77 @@ pub fn bus_name() -> String {
             format!("{BUS_NAME}.i{clean}")
         }
         _ => BUS_NAME.to_string(),
+    }
+}
+
+/// `slidewire strips|set|mute|bank|scene ...`: talk to the running app.
+pub fn remote(args: &[String]) -> Result<()> {
+    let conn = Connection::session().context("no session bus")?;
+    let name = bus_name();
+    let call = |method: &str, body: &dyn erased::Body| -> Result<zbus::Message> {
+        body.call(&conn, &name, method).map_err(|e| match e {
+            zbus::Error::MethodError(n, Some(msg), _) if n.as_str() == "org.freedesktop.DBus.Error.Failed" => {
+                anyhow::anyhow!(msg)
+            }
+            zbus::Error::MethodError(n, _, _) if n.as_str() == "org.freedesktop.DBus.Error.ServiceUnknown" => {
+                anyhow::anyhow!("Slidewire isn't running")
+            }
+            e => e.into(),
+        })
+    };
+    let arg = |i: usize, what: &str| args.get(i).cloned().with_context(|| format!("missing {what}"));
+    match args[0].as_str() {
+        "strips" => {
+            let reply = call("Strips", &())?;
+            let strips: Vec<(String, f64, bool, String)> = reply.body().deserialize()?;
+            // Ignore write errors: `slidewire strips | head` closes the pipe early.
+            use std::io::Write;
+            let mut out = std::io::stdout().lock();
+            for (name, pct, muted, what) in strips {
+                let state = if muted { "muted".to_string() } else { format!("{pct:>3.0}%") };
+                let _ = writeln!(out, "{name:<12} {state:>6}  {}", if what.is_empty() { "-" } else { &what });
+            }
+        }
+        "set" => {
+            let strip = arg(1, "strip name")?;
+            let value = arg(2, "volume (50, +5 or -5)")?;
+            let relative = value.starts_with('+') || value.starts_with('-');
+            let pct: f64 = value.trim_end_matches('%').parse().context("volume must be a number like 50, +5 or -5")?;
+            let reply = call("SetVolume", &(strip.as_str(), pct, relative))?;
+            let now: f64 = reply.body().deserialize()?;
+            println!("{strip}: {now:.0}%");
+        }
+        "mute" => {
+            let strip = arg(1, "strip name")?;
+            let mode = args.get(2).cloned().unwrap_or_else(|| "toggle".into());
+            let reply = call("Mute", &(strip.as_str(), mode.as_str()))?;
+            let muted: bool = reply.body().deserialize()?;
+            println!("{strip}: {}", if muted { "muted" } else { "unmuted" });
+        }
+        "bank" => {
+            let n: u32 = arg(1, "bank number")?.parse().context("bank must be a number")?;
+            call("Bank", &(n,))?;
+        }
+        "scene" => {
+            call("Scene", &(arg(1, "scene name")?.as_str(),))?;
+        }
+        other => anyhow::bail!("unknown command {other}"),
+    }
+    Ok(())
+}
+
+/// Method calls with differently typed bodies through one closure.
+mod erased {
+    use zbus::blocking::Connection;
+
+    pub trait Body {
+        fn call(&self, conn: &Connection, name: &str, method: &str) -> zbus::Result<zbus::Message>;
+    }
+
+    impl<T: serde::Serialize + zbus::zvariant::DynamicType> Body for T {
+        fn call(&self, conn: &Connection, name: &str, method: &str) -> zbus::Result<zbus::Message> {
+            conn.call_method(Some(name), super::PATH, Some(super::IFACE), method, self)
+        }
     }
 }
 
