@@ -127,4 +127,4 @@ It prints the LED messages the app sends back.
 
 ## License
 
-MIT or Apache-2.0, at your option. Bundled fonts: Inter and JetBrains Mono (OFL) and the Phosphor icon font (MIT), see `assets/fonts/README.md`.
+GPL-3.0-or-later, see `LICENSE`. Bundled fonts: Inter and JetBrains Mono (OFL) and the Phosphor icon font (MIT), see `assets/fonts/README.md`.

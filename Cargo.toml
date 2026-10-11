@@ -3,7 +3,7 @@ name = "slidewire"
 version = "0.1.0"
 edition = "2024"
 description = "Control app and device volumes with a MIDI controller"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 anyhow = "1.0.104"
