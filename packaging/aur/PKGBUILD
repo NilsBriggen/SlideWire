@@ -1,0 +1,55 @@
+# Maintainer: Nils Briggen <nilsbriggen@gmail.com>
+pkgname=slidewire-git
+_pkgname=slidewire
+pkgver=r0.0000000
+pkgrel=1
+pkgdesc="Control application and device volumes with a MIDI controller"
+arch=(x86_64 aarch64)
+url="https://git.briggen.dev/NilsBriggen/SlideWire"
+license=(GPL-3.0-or-later)
+depends=(alsa-lib libpulse gcc-libs glibc dbus libxkbcommon wayland libglvnd)
+makedepends=(cargo git)
+optdepends=(
+  'libx11: X11 session support'
+  'libxcursor: X11 session support'
+  'libxi: X11 session support'
+  'libxrandr: X11 session support'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+source=("$_pkgname::git+$url.git")
+sha256sums=(SKIP)
+
+pkgver() {
+  cd "$_pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # Keep the build directory out of panic messages.
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --release
+}
+
+package() {
+  cd "$_pkgname"
+  install -Dm755 target/release/slidewire "$pkgdir/usr/bin/slidewire"
+  install -Dm644 packaging/slidewire.desktop "$pkgdir/usr/share/applications/slidewire.desktop"
+  install -Dm644 assets/slidewire.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/slidewire.svg"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
+}

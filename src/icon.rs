@@ -99,3 +99,17 @@ pub fn svg() -> String {
 "##
     .into()
 }
+
+#[cfg(test)]
+mod tests {
+    /// Packages install `assets/slidewire.svg`; regenerate it with
+    /// `SLIDEWIRE_BLESS=1 cargo test` after changing the icon.
+    #[test]
+    fn packaged_icon_matches() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/slidewire.svg");
+        if std::env::var_os("SLIDEWIRE_BLESS").is_some() {
+            std::fs::write(path, super::svg()).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(path).unwrap(), super::svg(), "run SLIDEWIRE_BLESS=1 cargo test");
+    }
+}
