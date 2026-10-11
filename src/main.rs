@@ -112,8 +112,9 @@ fn main() {
         }
     };
 
-    let store = config::Store::load();
+    let mut store = config::Store::load();
     minimized |= store.settings.start_minimized;
+    let warnings = std::mem::take(&mut store.warnings);
     let shared = Arc::new(Mutex::new(Shared {
         store,
         audio: Default::default(),
@@ -134,6 +135,9 @@ fn main() {
         last_midi: None,
         source_peaks: Default::default(),
     }));
+    for w in warnings {
+        shared.lock().unwrap().log(w);
+    }
 
     let test_instance = crate::config::env("INSTANCE").is_some();
     if let Some(conn) = bus.as_ref().filter(|_| !test_instance)

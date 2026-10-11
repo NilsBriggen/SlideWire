@@ -53,6 +53,8 @@ pub struct Store {
     pub dir: PathBuf,
     pub settings: Settings,
     pub profiles: IndexMap<String, Profile>,
+    /// Problems found while loading, for the log.
+    pub warnings: Vec<String>,
 }
 
 impl Store {
@@ -71,10 +73,24 @@ impl Store {
             migrate_old_config(&dir);
         }
         let _ = std::fs::create_dir_all(dir.join("profiles"));
-        let settings = std::fs::read_to_string(dir.join("settings.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let mut warnings = Vec::new();
+        let settings_path = dir.join("settings.json");
+        let settings = match std::fs::read_to_string(&settings_path) {
+            Err(_) => Settings::default(),
+            Ok(text) => match serde_json::from_str(&text) {
+                Ok(s) => s,
+                Err(e) => {
+                    // Keep the broken file so nothing is lost when defaults are saved.
+                    let keep = settings_path.with_extension("json.broken");
+                    let _ = std::fs::copy(&settings_path, &keep);
+                    warnings.push(format!(
+                        "settings.json is invalid ({e}); using defaults. The old file was kept as {}",
+                        keep.display()
+                    ));
+                    Settings::default()
+                }
+            },
+        };
         let mut profiles = IndexMap::new();
         if let Ok(rd) = std::fs::read_dir(dir.join("profiles")) {
             let mut paths: Vec<PathBuf> =
@@ -86,11 +102,11 @@ impl Store {
                         let id = p.file_stem().unwrap().to_string_lossy().to_string();
                         profiles.insert(id, prof);
                     }
-                    Err(e) => eprintln!("skipping profile: {e:#}"),
+                    Err(e) => warnings.push(format!("Skipping profile {}: {e:#}", p.display())),
                 }
             }
         }
-        let mut store = Store { dir, settings, profiles };
+        let mut store = Store { dir, settings, profiles, warnings };
         if store.profiles.is_empty() {
             let id = crate::profile::new_id();
             store.profiles.insert(id.clone(), Profile::nanokontrol2());
@@ -172,9 +188,13 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Write via a temporary file and rename, keeping the previous version as `.bak`.
 pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, content).with_context(|| format!("writing {}", tmp.display()))?;
+    if path.exists() {
+        let _ = std::fs::copy(path, path.with_extension("json.bak"));
+    }
     std::fs::rename(&tmp, path)?;
     Ok(())
 }
@@ -205,4 +225,26 @@ pub fn set_autostart(on: bool) -> Result<()> {
         std::fs::remove_file(path)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broken_settings_are_kept() {
+        let dir = std::env::temp_dir().join(format!("slidewire-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.json"), "{ \"curve\": 2.0, oops").unwrap();
+        // SAFETY: no other test reads or writes the environment.
+        unsafe { std::env::set_var("SLIDEWIRE_CONFIG", &dir) };
+        let store = Store::load();
+        unsafe { std::env::remove_var("SLIDEWIRE_CONFIG") };
+        assert_eq!(store.warnings.len(), 1, "{:?}", store.warnings);
+        assert!(dir.join("settings.json.broken").exists());
+        // The default profile was written, and saving settings left a backup.
+        assert_eq!(store.profiles.len(), 1);
+        assert!(dir.join("settings.json.bak").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
