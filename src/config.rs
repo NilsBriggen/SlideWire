@@ -28,6 +28,8 @@ pub struct Settings {
     pub active_profile: Option<String>,
     /// Activate the profile matching a newly connected device.
     pub auto_switch: bool,
+    /// Soft takeover: a fader only changes the volume once it reaches it.
+    pub pickup: bool,
 }
 
 impl Default for Settings {
@@ -42,6 +44,7 @@ impl Default for Settings {
             allow_boost: false,
             active_profile: None,
             auto_switch: true,
+            pickup: true,
         }
     }
 }

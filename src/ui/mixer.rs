@@ -132,7 +132,7 @@ impl App {
                 let changed = if s.knob {
                     ui.horizontal(|ui| {
                         ui.add_space((inner.width() - 74.0 - 8.0 - 8.0) / 2.0);
-                        let r = widgets::knob(ui, &mut pos, 74.0, color);
+                        let r = widgets::knob(ui, &mut pos, 74.0, color, s.pickup);
                         widgets::segment_meter(ui, s.peak, hold, vec2(8.0, 74.0));
                         r.changed()
                     })
@@ -141,7 +141,7 @@ impl App {
                     let h = ui.available_height() - 34.0;
                     ui.horizontal(|ui| {
                         ui.add_space((inner.width() - 52.0 - 10.0 - 8.0) / 2.0);
-                        let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color);
+                        let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, s.pickup);
                         widgets::segment_meter(ui, s.peak, hold, vec2(10.0, h - 20.0));
                         r.changed()
                     })
@@ -150,8 +150,27 @@ impl App {
                 if changed {
                     self.send(UiCmd::SetGroupPosition(s.id.clone(), pos));
                 }
-                let readout = if s.muted { "MUTE".to_string() } else { format!("{:>3.0}%", s.position * 100.0) };
-                ui.label(RichText::new(readout).font(mono(13.0)).color(if s.muted { MUTE } else { LCD_TEXT }));
+                match s.pickup {
+                    // The hardware control has to reach the volume first.
+                    Some(hw) if !s.muted => {
+                        let arrow = if hw < s.position { icon::ARROW_UP } else { icon::ARROW_DOWN };
+                        ui.label(
+                            RichText::new(format!("{arrow}{:>3.0}%", s.position * 100.0))
+                                .font(mono(13.0))
+                                .color(ASSIGN),
+                        )
+                        .on_hover_text(format!(
+                            "Your controller is at {:.0}%. Move it {} to the volume to take over.",
+                            hw * 100.0,
+                            if hw < s.position { "up" } else { "down" }
+                        ));
+                    }
+                    _ => {
+                        let readout =
+                            if s.muted { "MUTE".to_string() } else { format!("{:>3.0}%", s.position * 100.0) };
+                        ui.label(RichText::new(readout).font(mono(13.0)).color(if s.muted { MUTE } else { LCD_TEXT }));
+                    }
+                }
             });
         });
 

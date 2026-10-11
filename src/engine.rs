@@ -70,6 +70,8 @@ pub struct StripView {
     pub knob: bool,
     /// Icon names to try for the first resolved target.
     pub icon_hint: Vec<String>,
+    /// Where the hardware fader is while it waits to pick up the volume.
+    pub pickup: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -162,6 +164,10 @@ pub struct Engine {
     meters_wanted: HashSet<MeterKey>,
     /// Smoothed group peaks for meter output.
     peaks: HashMap<String, f32>,
+    /// Last hardware position per absolute (non-motor) fader control.
+    hw_pos: HashMap<String, f32>,
+    /// Groups whose fader hasn't picked up the volume yet -> fader position.
+    waiting: HashMap<String, f32>,
     show_window: Sender<()>,
 }
 
@@ -190,6 +196,8 @@ impl Engine {
             focus_binary: String::new(),
             meters_wanted: HashSet::new(),
             peaks: HashMap::new(),
+            hw_pos: HashMap::new(),
+            waiting: HashMap::new(),
             show_window,
         }
     }
@@ -412,10 +420,23 @@ impl Engine {
             }
             match input {
                 Input::Absolute(pos) => {
+                    let pickup = !control.is_motorized() && self.shared.lock().unwrap().store.settings.pickup;
+                    let last = self.hw_pos.insert(cid.clone(), pos);
                     for (gid, g) in &profile.groups {
-                        if g.faders.contains(cid) {
-                            self.set_group_position(&profile, gid, pos, true);
+                        if !g.faders.contains(cid) {
+                            continue;
                         }
+                        // Strips without a live target have no volume to catch.
+                        let live = {
+                            let (targets, _) = self.group_settings(&profile, gid);
+                            !self.resolve(&profile, &targets).is_empty()
+                        };
+                        if pickup && live && !mapping::picks_up(last, pos, self.group_position(&profile, gid)) {
+                            self.waiting.insert(gid.clone(), pos);
+                            continue;
+                        }
+                        self.waiting.remove(gid);
+                        self.set_group_position(&profile, gid, pos, true);
                     }
                 }
                 Input::Relative(clicks) => {
@@ -536,6 +557,8 @@ impl Engine {
         let _ = sh.store.save_settings();
         drop(sh);
         self.positions.clear();
+        self.hw_pos.clear();
+        self.waiting.clear();
         self.sent.clear();
         self.scan_ports();
     }
@@ -979,8 +1002,7 @@ impl Engine {
             // Motor faders: echo the position to faders that also accept output.
             for cid in &g.faders {
                 if let Some(c) = profile.controls.get(cid)
-                    && c.command == crate::profile::Command::Pitch
-                    && c.delta.is_none()
+                    && c.is_motorized()
                 {
                     msgs.push(mapping::level_message(c, position));
                 }
@@ -1010,6 +1032,7 @@ impl Engine {
                             || g.faders.first().and_then(|c| profile.controls.get(c)).is_some_and(|c| c.delta.is_some())
                     }),
                 icon_hint: res.first().map(|r| r.hints.clone()).unwrap_or_default(),
+                pickup: self.waiting.get(gid).copied().filter(|p| (p - position).abs() > 0.03),
             });
         }
         if ui_visible {

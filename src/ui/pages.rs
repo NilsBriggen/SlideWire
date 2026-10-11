@@ -298,6 +298,11 @@ impl App {
                     ui.add(egui::DragValue::new(&mut s.default_steps).range(5..=400));
                 });
                 widgets::toggle(ui, &mut s.allow_boost, "Allow boosting above 100% (up to 150%)");
+                widgets::toggle(ui, &mut s.pickup, "Pick up: a fader only takes over once it reaches the volume");
+                widgets::hint(
+                    ui,
+                    "Stops jumps when a volume was changed elsewhere. The mixer shows where your fader is in amber.",
+                );
             });
             ui.add_space(10.0);
             widgets::card(ui, icon::PLUGS_CONNECTED, "MIDI", |ui| {

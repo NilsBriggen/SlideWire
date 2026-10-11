@@ -189,6 +189,18 @@ pub fn learn(msg: &Msg, kind: ControlKind) -> Control {
     }
 }
 
+/// Soft takeover for faders without a motor: after the volume changed
+/// elsewhere, a fader only takes over once it reaches (or moves across) the
+/// current value, so the volume never jumps. `last` is the fader's previous
+/// position, `pos` the new one, `current` where the volume is now.
+pub fn picks_up(last: Option<f32>, pos: f32, current: f32) -> bool {
+    const CLOSE: f32 = 0.03;
+    if (pos - current).abs() <= CLOSE {
+        return true;
+    }
+    last.is_some_and(|last| (last - current).abs() <= CLOSE || (last - current) * (pos - current) < 0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +324,20 @@ mod tests {
                 assert!((inverse_curve(curve(p, e), e) - p).abs() < 1e-4);
             }
         }
+    }
+
+    #[test]
+    fn pickup() {
+        // Fader at 20%, volume at 60%: moving to 30% does nothing...
+        assert!(!picks_up(Some(0.2), 0.3, 0.6));
+        // ...until it reaches the volume, or jumps across it.
+        assert!(picks_up(Some(0.3), 0.59, 0.6));
+        assert!(picks_up(Some(0.5), 0.7, 0.6));
+        assert!(picks_up(Some(0.9), 0.4, 0.6));
+        // First message after connecting: only if it's already close.
+        assert!(!picks_up(None, 0.2, 0.6));
+        assert!(picks_up(None, 0.61, 0.6));
+        // Once picked up, small moves keep following.
+        assert!(picks_up(Some(0.6), 0.65, 0.6));
     }
 }

@@ -62,7 +62,8 @@ fn scroll_delta(ui: &Ui, response: &Response) -> f32 {
 }
 
 /// Long-throw fader. `pos` is 0..=1. Drag, scroll, double-click for 100%.
-pub fn fader(ui: &mut Ui, pos: &mut f32, size: Vec2, color: Color32) -> Response {
+/// `ghost` marks where the hardware fader is while it waits to pick up.
+pub fn fader(ui: &mut Ui, pos: &mut f32, size: Vec2, color: Color32, ghost: Option<f32>) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let cap = vec2(size.x.min(38.0), 20.0);
     let track = Rect::from_center_size(rect.center(), vec2(6.0, rect.height() - cap.y));
@@ -104,6 +105,18 @@ pub fn fader(ui: &mut Ui, pos: &mut f32, size: Vec2, color: Color32) -> Response
         glow(&painter, fill, 2.0, color.gamma_multiply(0.5), 8.0);
         painter.rect_filled(fill, 1.5, color);
     }
+    if let Some(g) = ghost {
+        let gy = track.bottom() - travel * g.clamp(0.0, 1.0);
+        let ghost_rect = Rect::from_center_size(pos2(track.center().x, gy), cap);
+        painter.rect_stroke(ghost_rect, 3.0, Stroke::new(1.5, ASSIGN.gamma_multiply(0.8)), StrokeKind::Inside);
+        // Dotted line from the hardware position to the volume.
+        let (a, b) = (gy.min(y) + cap.y / 2.0, gy.max(y) - cap.y / 2.0);
+        let mut yy = a;
+        while yy < b {
+            painter.circle_filled(pos2(track.right() + 3.0, yy), 1.0, ASSIGN.gamma_multiply(0.7));
+            yy += 5.0;
+        }
+    }
     // Cap.
     let cap_rect = Rect::from_center_size(pos2(track.center().x, y), cap);
     painter.add(
@@ -144,7 +157,8 @@ fn arc_points(center: Pos2, radius: f32, from: f32, to: f32) -> Vec<Pos2> {
 }
 
 /// Rotary knob with a 270° value ring. Drag vertically or scroll.
-pub fn knob(ui: &mut Ui, pos: &mut f32, diameter: f32, color: Color32) -> Response {
+/// `ghost` marks where the hardware knob is while it waits to pick up.
+pub fn knob(ui: &mut Ui, pos: &mut f32, diameter: f32, color: Color32, ghost: Option<f32>) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::click_and_drag());
     let before = *pos;
     if response.dragged() {
@@ -174,6 +188,12 @@ pub fn knob(ui: &mut Ui, pos: &mut f32, diameter: f32, color: Color32) -> Respon
     if *pos > 0.001 {
         painter.add(Shape::line(arc_points(c, ring_r, start, value), Stroke::new(7.0, color.gamma_multiply(0.25))));
         painter.add(Shape::line(arc_points(c, ring_r, start, value), Stroke::new(3.0, color)));
+    }
+    if let Some(g) = ghost {
+        let a = start + (end - start) * g.clamp(0.0, 1.0);
+        let p = c + ring_r * vec2(a.cos(), a.sin());
+        painter.circle_filled(p, 4.0, ASSIGN);
+        painter.circle_stroke(p, 4.0, Stroke::new(1.0, Color32::from_black_alpha(160)));
     }
     // Body.
     let body_r = r - 9.0;

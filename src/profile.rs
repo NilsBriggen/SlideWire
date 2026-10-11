@@ -155,6 +155,11 @@ pub struct Control {
 }
 
 impl Control {
+    /// 14-bit pitch-bend faders are motorized on the controllers that use
+    /// them (Mackie protocol); we echo positions back to them.
+    pub fn is_motorized(&self) -> bool {
+        self.command == Command::Pitch && self.delta.is_none()
+    }
     pub fn min(&self) -> u16 {
         self.min_value.unwrap_or(0)
     }

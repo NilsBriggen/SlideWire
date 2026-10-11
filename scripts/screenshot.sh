@@ -66,7 +66,8 @@ for tab in "${TABS[@]}"; do
     app=$!
     sleep 3.5
     # Some activity: fader 1 to 70%, knob 1, mute strip 1 twice -> unmuted, M2 lights nothing.
-    { echo "f 1 90"; echo "k 1 60"; echo "f 2 40"; echo "b 48"; } >"$WORK/nano"
+    # Fader 1 sweeps across the volume (soft takeover picks it up); knob 1 jumps, so it waits.
+    { echo "f 1 0"; echo "f 1 127"; echo "f 1 90"; echo "k 1 60"; echo "f 2 40"; echo "b 48"; } >"$WORK/nano"
     sleep 0.25
     DISPLAY=$DISP xdotool search --name "Slidewire" windowsize $(( ${SIZE%x*} - 40 )) $(( ${SIZE#*x} - 40 )) windowmove 20 20 2>/dev/null || true
     sleep 0.8
