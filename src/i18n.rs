@@ -47,6 +47,45 @@ mod tests {
         assert!(missing.is_empty(), "run scripts/i18n-extract.py; missing: {missing:?}");
     }
 
+    /// Every translation has the same keys as English, and each value the
+    /// same `%{…}` placeholders as its key.
+    #[test]
+    fn translations_match_english() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let load = |name: &str| -> serde_json::Map<String, serde_json::Value> {
+            let text = std::fs::read_to_string(format!("{root}/locales/{name}")).unwrap();
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name}: {e}"))
+        };
+        let en = load("en.json");
+        let ph = regex::Regex::new(r"%\{\w+\}").unwrap();
+        let placeholders = |s: &str| {
+            let mut v: Vec<String> = ph.find_iter(s).map(|m| m.as_str().to_string()).collect();
+            v.sort();
+            v
+        };
+        let mut problems = Vec::new();
+        for e in std::fs::read_dir(format!("{root}/locales")).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".json") || name == "en.json" {
+                continue;
+            }
+            let tr = load(&name);
+            for key in en.keys().filter(|k| !k.starts_with('_')) {
+                match tr.get(key).and_then(|v| v.as_str()) {
+                    None => problems.push(format!("{name}: missing {key:?}")),
+                    Some(v) if placeholders(v) != placeholders(key) => {
+                        problems.push(format!("{name}: placeholders differ in {key:?} -> {v:?}"))
+                    }
+                    Some(_) => {}
+                }
+            }
+            for key in tr.keys().filter(|k| !k.starts_with('_') && !en.contains_key(*k)) {
+                problems.push(format!("{name}: extra key {key:?}"));
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
     #[test]
     fn interpolation_and_fallback() {
         // A key that isn't translated comes back as itself, filled in.
