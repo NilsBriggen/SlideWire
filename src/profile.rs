@@ -400,6 +400,18 @@ pub enum ButtonAction {
     Obs {
         op: crate::obs::ObsOp,
     },
+    /// Hear an input (or a bus) on an output, live; press again to stop.
+    /// Empty names: the default input / output.
+    Monitor {
+        #[serde(default)]
+        source: String,
+        #[serde(default)]
+        sink: String,
+    },
+    /// Load an EasyEffects preset (noise suppression on/off, EQ, ...).
+    EasyEffects {
+        preset: String,
+    },
 }
 
 impl ButtonAction {
@@ -419,6 +431,8 @@ impl ButtonAction {
             ButtonAction::PushToTalk => "Push to talk",
             ButtonAction::PushToMute => "Push to mute",
             ButtonAction::Obs { .. } => "OBS Studio",
+            ButtonAction::Monitor { .. } => "Hear yourself (monitor)",
+            ButtonAction::EasyEffects { .. } => "EasyEffects preset",
         }
     }
 }
@@ -523,8 +537,29 @@ pub struct Profile {
     /// Button control id -> action (for buttons outside groups).
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub buttons: IndexMap<String, ButtonAction>,
+    /// Switch bank or scene while certain apps have focus.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto: Vec<AutoRule>,
     #[serde(flatten)]
     pub extra: IndexMap<String, Value>,
+}
+
+/// While a matching app has focus, switch to a bank or recall a scene;
+/// afterwards, go back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoRule {
+    pub app: AppMatch,
+    /// Shown in the editor ("Firefox").
+    #[serde(default)]
+    pub label: String,
+    pub action: AutoAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum AutoAction {
+    Bank { bank: usize },
+    Scene { name: String },
 }
 
 /// Volume position (0..=1) and mute of every strip, per bank.
@@ -623,6 +658,7 @@ impl Profile {
         p.bank = 0;
         p.scenes.clear();
         p.buttons.clear();
+        p.auto.clear();
         p.preset = false;
         Ok(serde_json::to_string_pretty(&p)?)
     }

@@ -16,7 +16,7 @@ use crate::config::Store;
 use crate::dbus::Osd;
 use crate::mapping::{self, Input, Msg};
 use crate::midi::{self, PortLister};
-use crate::profile::{AppMatch, ButtonAction, ControlKind, Profile, Target};
+use crate::profile::{AppMatch, AutoAction, ButtonAction, ControlKind, Profile, Target};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FocusInfo {
@@ -264,6 +264,23 @@ pub struct Engine {
     port_key: Option<(Option<String>, String, String, String)>,
     /// The last save error shown, so a full disk doesn't repeat it.
     save_error: Option<String>,
+    /// Modules asked for and when, so they aren't loaded twice before the
+    /// server reports them.
+    module_pending: HashMap<String, Instant>,
+    /// Streams the remembered routes were applied to (once each, so the
+    /// user can still move them by hand).
+    routed: HashSet<(Kind, u32)>,
+    /// Focus rule in effect: its index and what to go back to.
+    auto_active: Option<(usize, AutoUndo)>,
+    /// When to go back, after focus left the rule's app.
+    auto_restore_at: Option<Instant>,
+}
+
+/// How things were before a focus rule switched bank or scene.
+#[derive(Debug, Clone)]
+enum AutoUndo {
+    Bank(usize),
+    Scene(crate::profile::Scene),
 }
 
 impl Engine {
@@ -302,6 +319,10 @@ impl Engine {
             show_window,
             port_key: None,
             save_error: None,
+            module_pending: HashMap::new(),
+            routed: HashSet::new(),
+            auto_active: None,
+            auto_restore_at: None,
         }
     }
 
@@ -319,6 +340,7 @@ impl Engine {
             let busy = !self.meters_wanted.is_empty()
                 || !self.duck_base.is_empty()
                 || self.rescan_at.is_some()
+                || self.auto_restore_at.is_some()
                 || self.shared.lock().unwrap().store.has_unsaved();
             let tick = Duration::from_millis(if busy { 40 } else { 500 });
             match self.rx.recv_timeout(tick) {
@@ -344,6 +366,10 @@ impl Engine {
                 Err(_) => return,
             }
             self.save_if_due(false);
+            if self.auto_restore_at.is_some_and(|t| Instant::now() >= t) {
+                self.auto_restore_at = None;
+                self.auto_restore();
+            }
             let now = Instant::now();
             // The sequencer port shows up a moment after the device node, so
             // scan again shortly after a hotplug event.
@@ -381,18 +407,28 @@ impl Engine {
                     self.focus_cache.clear();
                     self.waiting.clear();
                     self.meters_wanted.clear();
+                    self.module_pending.clear();
+                    self.routed.clear();
                     if st.connected {
                         sh.log("Connected to the sound server");
+                        // Monitors left behind by a crash: off is the safe state.
+                        for m in crate::routing::all_monitors(&st) {
+                            self.audio.send(AudioCmd::UnloadModule(m.index));
+                        }
                     } else {
                         sh.warn("Lost the sound server; reconnecting");
                     }
                 }
                 sh.audio = Arc::new(st);
+                drop(sh);
+                self.sync_buses();
+                self.apply_routes();
             }
             Event::Focus(f) => {
                 self.focus_cache.clear();
                 self.focus_binary = f.pid.map(process_binary).unwrap_or_default();
                 self.shared.lock().unwrap().focus = f;
+                self.auto_focus();
             }
             Event::ShowWindow => {
                 let _ = self.show_window.send(());
@@ -704,6 +740,21 @@ impl Engine {
             }
             ButtonAction::PushToTalk => self.mute_default_input(false),
             ButtonAction::PushToMute => self.mute_default_input(true),
+            ButtonAction::Monitor { source, sink } => self.toggle_monitor(source, sink),
+            ButtonAction::EasyEffects { preset } => {
+                let mut sh = self.shared.lock().unwrap();
+                match crate::routing::easyeffects_load(preset) {
+                    Ok(()) => {
+                        if sh.store.settings.osd {
+                            self.osd.show_text("com.github.wwmm.easyeffects", &format!("EasyEffects: {preset}"));
+                        }
+                    }
+                    Err(e) => {
+                        sh.warn(format!("{e:#}"));
+                        sh.notify(Notice::Problem(e.to_string()));
+                    }
+                }
+            }
             ButtonAction::Obs { op } => {
                 let op = op.clone();
                 let (url, password) = {
@@ -953,6 +1004,7 @@ impl Engine {
                     self.port_key = key;
                     self.scan_ports();
                 }
+                self.sync_buses();
             }
             // Handled in the run loop.
             UiCmd::Shutdown(_) => {}
@@ -1044,6 +1096,10 @@ impl Engine {
     /// Leave things as the user set them: undo ducking, turn the LEDs off
     /// and save.
     fn shutdown(&mut self) {
+        let audio = self.shared.lock().unwrap().audio.clone();
+        for m in crate::routing::all_monitors(&audio) {
+            self.audio.send(AudioCmd::UnloadModule(m.index));
+        }
         for (index, base) in std::mem::take(&mut self.duck_base) {
             self.audio.send(AudioCmd::SetVolume(Kind::SinkInput, index, base));
         }
@@ -1062,6 +1118,140 @@ impl Engine {
         }
         self.save_if_due(true);
         self.audio.flush(Duration::from_millis(500));
+    }
+
+    // --------------------------------------------------- buses and routes
+
+    /// Load or unload modules so the configured buses exist.
+    fn sync_buses(&mut self) {
+        let (audio, buses) = {
+            let sh = self.shared.lock().unwrap();
+            (sh.audio.clone(), sh.store.settings.buses.clone())
+        };
+        let now = Instant::now();
+        self.module_pending.retain(|_, t| now.duration_since(*t) < Duration::from_secs(3));
+        for cmd in crate::routing::sync_buses(&buses, &audio) {
+            let key = format!("{cmd:?}");
+            if self.module_pending.contains_key(&key) {
+                continue;
+            }
+            self.module_pending.insert(key, now);
+            self.audio.send(cmd);
+        }
+    }
+
+    /// Move newly appeared streams to the device their app is routed to.
+    fn apply_routes(&mut self) {
+        let (audio, routes) = {
+            let sh = self.shared.lock().unwrap();
+            (sh.audio.clone(), sh.store.settings.routes.clone())
+        };
+        let live: HashSet<(Kind, u32)> = audio
+            .apps
+            .iter()
+            .map(|a| (Kind::SinkInput, a.index))
+            .chain(audio.app_inputs.iter().map(|a| (Kind::SourceOutput, a.index)))
+            .collect();
+        self.routed.retain(|k| live.contains(k));
+        if routes.is_empty() {
+            return;
+        }
+        for (kind, streams, devices) in
+            [(Kind::SinkInput, &audio.apps, &audio.sinks), (Kind::SourceOutput, &audio.app_inputs, &audio.sources)]
+        {
+            for a in streams {
+                if !self.routed.insert((kind, a.index)) {
+                    continue;
+                }
+                let route =
+                    routes.iter().find(|r| r.input == (kind == Kind::SourceOutput) && self.app_matches(&r.app, a));
+                let Some(route) = route else { continue };
+                if let Some(d) = devices.iter().find(|d| d.name == route.device)
+                    && d.index != a.device
+                {
+                    self.audio.send(AudioCmd::Move(kind, a.index, d.name.clone()));
+                }
+            }
+        }
+    }
+
+    /// Start or stop hearing `source` (empty: the default input) on `sink`.
+    fn toggle_monitor(&mut self, source: &str, sink: &str) {
+        let audio = self.shared.lock().unwrap().audio.clone();
+        let source = if source.is_empty() { audio.default_source.clone() } else { source.to_string() };
+        let running: Vec<u32> = crate::routing::monitors_from(&audio, &source).map(|m| m.index).collect();
+        let on = running.is_empty();
+        if on {
+            let sink = if sink.is_empty() {
+                crate::routing::real_default_sink(&audio).unwrap_or_default()
+            } else {
+                sink.to_string()
+            };
+            if source.is_empty() || sink.is_empty() {
+                return;
+            }
+            self.audio.send(crate::routing::monitor_cmd(&source, &sink));
+        } else {
+            for i in running {
+                self.audio.send(AudioCmd::UnloadModule(i));
+            }
+        }
+        if self.shared.lock().unwrap().store.settings.osd {
+            let text = if on { "Monitoring on" } else { "Monitoring off" };
+            self.osd.show_text("audio-headphones", text);
+        }
+    }
+
+    // ---------------------------------------------------------- focus rules
+
+    /// Does `m` match the focused window's app?
+    fn focus_matches(&mut self, m: &AppMatch) -> bool {
+        let class = self.shared.lock().unwrap().focus.class.clone();
+        let names = [self.focus_binary.clone(), class];
+        let key = if m.regex { format!("re:{}", m.pattern) } else { format!("glob:{}", m.pattern) };
+        let re = self.regexes.entry(key).or_insert_with(|| compile_match(m)).clone();
+        re.is_some_and(|re| names.iter().any(|n| !n.is_empty() && re.is_match(n)))
+    }
+
+    /// Focus changed: apply the first matching rule, or plan to go back.
+    fn auto_focus(&mut self) {
+        let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
+        let hit = profile.auto.iter().position(|r| self.focus_matches(&r.app));
+        match (hit, &self.auto_active) {
+            (Some(i), Some((active, _))) if *active == i => self.auto_restore_at = None,
+            (Some(i), _) => {
+                self.auto_restore_at = None;
+                // Going from one rule to another keeps the first undo.
+                let undo = match self.auto_active.take() {
+                    Some((_, undo)) => undo,
+                    None => match &profile.auto[i].action {
+                        AutoAction::Bank { .. } => AutoUndo::Bank(profile.bank),
+                        AutoAction::Scene { .. } => AutoUndo::Scene(self.snapshot(&profile)),
+                    },
+                };
+                let rule = profile.auto[i].clone();
+                match &rule.action {
+                    AutoAction::Bank { bank } => self.set_bank(Some(*bank), 0),
+                    AutoAction::Scene { name } => self.recall_scene(name),
+                }
+                self.shared.lock().unwrap().log(format!("{} has focus: {}", rule.label, describe_auto(&rule.action)));
+                self.auto_active = Some((i, undo));
+            }
+            // Wait a moment: alt-tabbing through other windows shouldn't flip back and forth.
+            (None, Some(_)) if self.auto_restore_at.is_none() => {
+                self.auto_restore_at = Some(Instant::now() + Duration::from_millis(1500));
+            }
+            (None, _) => {}
+        }
+    }
+
+    fn auto_restore(&mut self) {
+        let Some((_, undo)) = self.auto_active.take() else { return };
+        match undo {
+            AutoUndo::Bank(b) => self.set_bank(Some(b), 0),
+            AutoUndo::Scene(scene) => self.apply_scene(&scene),
+        }
+        self.feedback();
     }
 
     // ------------------------------------------------------- group behaviour
@@ -1229,19 +1419,7 @@ impl Engine {
 
     fn app_matches(&mut self, m: &AppMatch, a: &AppStream) -> bool {
         let key = if m.regex { format!("re:{}", m.pattern) } else { format!("glob:{}", m.pattern) };
-        let re = self
-            .regexes
-            .entry(key)
-            .or_insert_with(|| {
-                let src = if m.regex {
-                    format!("(?i){}", m.pattern)
-                } else {
-                    let parts: Vec<String> = m.pattern.split('*').map(regex::escape).collect();
-                    format!("(?i)^{}$", parts.join(".*"))
-                };
-                Regex::new(&src).ok()
-            })
-            .clone();
+        let re = self.regexes.entry(key).or_insert_with(|| compile_match(m)).clone();
         let Some(re) = re else { return false };
         re.is_match(&a.binary) || re.is_match(&a.app_name)
     }
@@ -1512,6 +1690,10 @@ impl Engine {
                 ButtonAction::Bank { .. } => profile.bank > 0,
                 ButtonAction::MuteInputs | ButtonAction::PushToMute => mic_muted,
                 ButtonAction::PushToTalk => !mic_muted,
+                ButtonAction::Monitor { source, .. } => {
+                    let source = if source.is_empty() { &audio.default_source } else { source };
+                    crate::routing::monitors_from(&audio, source).next().is_some()
+                }
                 _ => continue,
             };
             if let Some(c) = profile.controls.get(cid) {
@@ -1660,6 +1842,24 @@ fn process_binary(pid: u32) -> String {
         .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
         .or_else(|| std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim().to_string()))
         .unwrap_or_default()
+}
+
+/// An app pattern as a case-insensitive regex: `*` wildcards, or a regex.
+fn compile_match(m: &AppMatch) -> Option<Regex> {
+    let src = if m.regex {
+        format!("(?i){}", m.pattern)
+    } else {
+        let parts: Vec<String> = m.pattern.split('*').map(regex::escape).collect();
+        format!("(?i)^{}$", parts.join(".*"))
+    };
+    Regex::new(&src).ok()
+}
+
+fn describe_auto(a: &AutoAction) -> String {
+    match a {
+        AutoAction::Bank { bank } => format!("bank {}", bank + 1),
+        AutoAction::Scene { name } => format!("scene \"{name}\""),
+    }
 }
 
 fn shell_quote(s: &str) -> String {

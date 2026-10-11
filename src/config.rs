@@ -39,6 +39,10 @@ pub struct Settings {
     /// obs-websocket address and password, for OBS button actions.
     pub obs_url: String,
     pub obs_password: String,
+    /// Virtual outputs that mix apps together.
+    pub buses: Vec<crate::routing::Bus>,
+    /// Apps that always play on (or record from) a certain device.
+    pub routes: Vec<crate::routing::Route>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -103,6 +107,8 @@ impl Default for Settings {
             reduce_motion: false,
             obs_url: "ws://localhost:4455".into(),
             obs_password: String::new(),
+            buses: Vec::new(),
+            routes: Vec::new(),
         }
     }
 }

@@ -114,6 +114,16 @@ pub struct AudioState {
     pub app_inputs: Vec<AppStream>,
     pub default_sink: String,
     pub default_source: String,
+    /// Loaded server modules (we load null sinks and loopbacks for buses
+    /// and monitoring).
+    pub modules: Vec<Module>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Module {
+    pub index: u32,
+    pub name: String,
+    pub argument: String,
 }
 
 impl AudioState {
@@ -140,6 +150,9 @@ pub enum AudioCmd {
     SetMeters(HashSet<MeterKey>),
     /// Answer once everything sent before has gone out to the server.
     Flush(Sender<()>),
+    /// Load a module (name, arguments).
+    LoadModule(String, String),
+    UnloadModule(u32),
 }
 
 pub type Peaks = Arc<Mutex<HashMap<MeterKey, f32>>>;
@@ -227,6 +240,7 @@ enum Fac {
     SinkInput,
     SourceOutput,
     Server,
+    Module,
 }
 
 #[derive(Default)]
@@ -240,6 +254,7 @@ struct Shared {
     new_sources: Vec<Device>,
     new_apps: Vec<AppStream>,
     new_app_inputs: Vec<AppStream>,
+    new_modules: Vec<Module>,
 }
 
 fn run(
@@ -275,7 +290,7 @@ fn run(
     {
         let mut s = shared.borrow_mut();
         s.state.connected = true;
-        s.dirty.extend([Fac::Sink, Fac::Source, Fac::SinkInput, Fac::SourceOutput, Fac::Server]);
+        s.dirty.extend([Fac::Sink, Fac::Source, Fac::SinkInput, Fac::SourceOutput, Fac::Server, Fac::Module]);
     }
     {
         let sh = shared.clone();
@@ -287,6 +302,7 @@ fn run(
                 Some(Facility::SinkInput) => Fac::SinkInput,
                 Some(Facility::SourceOutput) => Fac::SourceOutput,
                 Some(Facility::Server) => Fac::Server,
+                Some(Facility::Module) => Fac::Module,
                 _ => return,
             };
             sh.borrow_mut().dirty.insert(f);
@@ -296,7 +312,8 @@ fn run(
                 | InterestMaskSet::SOURCE
                 | InterestMaskSet::SINK_INPUT
                 | InterestMaskSet::SOURCE_OUTPUT
-                | InterestMaskSet::SERVER,
+                | InterestMaskSet::SERVER
+                | InterestMaskSet::MODULE,
             |_| {},
         );
     }
@@ -479,7 +496,7 @@ fn refresh(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>) {
                     match r {
                         ListResult::Item(i) => {
                             let a = app_stream(i.index, &i.proplist, &i.volume, i.mute, i.sink, i.name.as_deref());
-                            if a.app_name != APP_NAME {
+                            if a.app_name != APP_NAME && !is_loopback(&a, &i.proplist) {
                                 s.new_apps.push(a);
                             }
                         }
@@ -499,7 +516,7 @@ fn refresh(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>) {
                             let a = app_stream(i.index, &i.proplist, &i.volume, i.mute, i.source, i.name.as_deref());
                             // Hide our own and other mixers' peak-detect streams.
                             let peak = a.media_name.to_lowercase().contains("peak");
-                            if a.app_name != APP_NAME && !peak {
+                            if a.app_name != APP_NAME && !peak && !is_loopback(&a, &i.proplist) {
                                 s.new_app_inputs.push(a);
                             }
                         }
@@ -520,8 +537,34 @@ fn refresh(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>) {
                     s.changed = true;
                 });
             }
+            Fac::Module => {
+                intro.get_module_info_list(move |r| {
+                    let mut s = sh.borrow_mut();
+                    match r {
+                        ListResult::Item(i) => {
+                            let m = Module {
+                                index: i.index,
+                                name: i.name.as_deref().unwrap_or_default().to_string(),
+                                argument: i.argument.as_deref().unwrap_or_default().to_string(),
+                            };
+                            s.new_modules.push(m);
+                        }
+                        ListResult::End | ListResult::Error => {
+                            s.state.modules = std::mem::take(&mut s.new_modules);
+                            s.in_flight.remove(&Fac::Module);
+                            s.changed = true;
+                        }
+                    }
+                });
+            }
         }
     }
+}
+
+/// Our bus and monitor loopbacks: plumbing, not apps.
+fn is_loopback(a: &AppStream, p: &Proplist) -> bool {
+    let ours = |n: &str| n == crate::routing::BUS_STREAM || n == crate::routing::MONITOR_STREAM;
+    ours(&a.media_name) || ours(&props_str(p, "media.name"))
 }
 
 fn app_stream(index: u32, p: &Proplist, v: &ChannelVolumes, mute: bool, device: u32, name: Option<&str>) -> AppStream {
@@ -579,6 +622,8 @@ fn apply(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>, cmd: AudioCmd
             Kind::SourceOutput => drop(intro.move_source_output_by_name(index, &device, None)),
             _ => {}
         },
+        AudioCmd::LoadModule(name, args) => drop(intro.load_module(&name, &args, |_| {})),
+        AudioCmd::UnloadModule(index) => drop(intro.unload_module(index, |_| {})),
         AudioCmd::SetMeters(_) | AudioCmd::Flush(_) => {}
     }
 }

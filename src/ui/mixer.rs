@@ -11,6 +11,7 @@ use crate::audio::{AudioState, Kind, MeterKey};
 use crate::engine::{StripView, UiCmd};
 use crate::mapping;
 use crate::profile::{AppMatch, Target, Widget};
+use crate::routing::{self, Bus, Route};
 
 const STRIP_MIN_W: f32 = 92.0;
 const STRIP_MAX_W: f32 = 168.0;
@@ -985,12 +986,17 @@ impl App {
                 });
                 ui.add_space(8.0);
             }
+            self.buses_card(ui, &audio, &peaks, max);
+            ui.add_space(8.0);
+            let outputs: Vec<&crate::audio::Device> =
+                audio.sinks.iter().filter(|d| !routing::is_bus(&d.name)).collect();
+            let inputs: Vec<&crate::audio::Device> = audio.sources.iter().collect();
             for (kind, title, ic, devices, default) in [
-                (Kind::Sink, "Outputs", icon::SPEAKER_HIGH, &audio.sinks, &audio.default_sink),
-                (Kind::Source, "Inputs", icon::MICROPHONE_STAGE, &audio.sources, &audio.default_source),
+                (Kind::Sink, "Outputs", icon::SPEAKER_HIGH, &outputs, &audio.default_sink),
+                (Kind::Source, "Inputs", icon::MICROPHONE_STAGE, &inputs, &audio.default_source),
             ] {
                 widgets::collapsible_card(ui, ic, title, devices.len(), |ui| {
-                    for d in devices {
+                    for d in devices.iter().copied() {
                         if !shown(&d.label, &d.detail) {
                             continue;
                         }
@@ -1031,6 +1037,129 @@ impl App {
         });
     }
 
+    /// Buses: virtual outputs that mix apps together. Each plays on a real
+    /// output; apps go in with their "Play on…" menu.
+    fn buses_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        audio: &AudioState,
+        peaks: &std::collections::HashMap<MeterKey, f32>,
+        max: f32,
+    ) {
+        let buses = self.shared.lock().unwrap().store.settings.buses.clone();
+        widgets::collapsible_card(ui, icon::FADERS, "Buses", buses.len(), |ui| {
+            if buses.is_empty() {
+                widgets::hint(
+                    ui,
+                    "A bus mixes several apps into one fader, like Game, Chat and Music mixes. \
+                     Put apps on it with their Play on… menu.",
+                );
+            }
+            let outputs: Vec<&crate::audio::Device> =
+                audio.sinks.iter().filter(|d| !routing::is_bus(&d.name)).collect();
+            let mut remove = None;
+            let mut set_output = None;
+            for (i, bus) in buses.iter().enumerate() {
+                let sink = bus.sink_name();
+                ui.horizontal(|ui| match audio.sinks.iter().find(|d| d.name == sink) {
+                    Some(d) => {
+                        let target = Target::Output { name: d.name.clone(), label: bus.name.clone() };
+                        let peak = peaks.get(&MeterKey::Sink(d.name.clone())).copied().unwrap_or(0.0);
+                        let plays_on = bus
+                            .output
+                            .as_ref()
+                            .and_then(|o| outputs.iter().find(|d| d.name == *o))
+                            .map_or("Default output".to_string(), |d| d.label.clone());
+                        ui.vertical(|ui| {
+                            self.source_row(
+                                ui,
+                                Kind::Sink,
+                                &[d.index],
+                                &bus.name,
+                                Some(format!("plays on {plays_on}")),
+                                &["audio-card".into(), "audio-speakers".into()],
+                                d.volume,
+                                d.mute,
+                                None,
+                                peak,
+                                max,
+                                target,
+                                None,
+                            );
+                        });
+                    }
+                    None => {
+                        ui.label(RichText::new(icon::HOURGLASS).color(pal().text_dim));
+                        ui.label(&bus.name);
+                        widgets::hint(ui, "starting…");
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(26.0);
+                    let current = bus.output.clone().unwrap_or_default();
+                    let text = outputs
+                        .iter()
+                        .find(|d| d.name == current)
+                        .map_or("Default output".to_string(), |d| d.label.clone());
+                    egui::ComboBox::from_id_salt(("bus-out", i))
+                        .selected_text(format!("{}  {text}", icon::SPEAKER_HIGH))
+                        .width(170.0)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(bus.output.is_none(), "Default output").clicked() {
+                                set_output = Some((i, None));
+                            }
+                            for d in &outputs {
+                                let on = bus.output.as_deref() == Some(d.name.as_str());
+                                if ui.selectable_label(on, &d.label).on_hover_text(&d.description).clicked() {
+                                    set_output = Some((i, Some(d.name.clone())));
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("Where this bus plays");
+                    if ui
+                        .add(egui::Button::new(RichText::new(icon::TRASH).color(pal().text_dim)).frame(false))
+                        .on_hover_text("Remove bus")
+                        .clicked()
+                    {
+                        remove = Some(i);
+                    }
+                });
+                ui.add_space(4.0);
+            }
+            ui.horizontal(|ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut self.new_bus)
+                        .hint_text("New bus, e.g. Game")
+                        .desired_width(ui.available_width() - 70.0),
+                );
+                let name = self.new_bus.trim().to_string();
+                let new = Bus { name: name.clone(), output: None };
+                let ok = !name.is_empty() && !buses.iter().any(|b| b.sink_name() == new.sink_name());
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (ui.add_enabled(ok, egui::Button::new(format!("{}  Add", icon::PLUS))).clicked() || enter) && ok {
+                    self.edit_settings(|s| s.buses.push(new));
+                    self.new_bus.clear();
+                }
+            });
+            if let Some((i, out)) = set_output {
+                self.edit_settings(|s| s.buses[i].output = out);
+            }
+            if let Some(i) = remove {
+                let name = buses[i].name.clone();
+                self.edit_settings(|s| {
+                    s.buses.remove(i);
+                });
+                self.toast(
+                    icon::TRASH,
+                    format!("Removed bus {name}; its apps moved to the default output"),
+                    None,
+                    None,
+                );
+            }
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn source_row(
         &mut self,
@@ -1053,7 +1182,7 @@ impl App {
             ui.spacing_mut().item_spacing.x = 6.0;
             // Drag handle: icon + name.
             let id = ui.id().with(("src", kind as u8, indices.first().copied()));
-            ui.dnd_drag_source(id, target, |ui| {
+            ui.dnd_drag_source(id, target.clone(), |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(icon::DOTS_SIX_VERTICAL).color(pal().text_faint));
                     match &img {
@@ -1127,14 +1256,49 @@ impl App {
                     .on_hover_text(hover);
                 egui::Popup::menu(&button).show(|ui| {
                     ui.label(RichText::new(hover).font(semibold(13.0)));
+                    let app = match &target {
+                        Target::App { m, .. } | Target::AppInput { m, .. } => Some(m.clone()),
+                        _ => None,
+                    };
+                    let input = kind == Kind::SourceOutput;
+                    let routes = self.shared.lock().unwrap().store.settings.routes.clone();
+                    let route = app.as_ref().and_then(|m| routes.iter().position(|r| r.app == *m && r.input == input));
                     for d in devices {
                         let on = d.index == current;
-                        let text = format!("{}  {}", if on { icon::CHECK } else { "    " }, d.label);
+                        let bus = routing::is_bus(&d.name);
+                        let mark = if on { icon::CHECK } else { "    " };
+                        let text = if bus {
+                            format!("{mark}  {}  {}", icon::FADERS, d.label)
+                        } else {
+                            format!("{mark}  {}", d.label)
+                        };
                         if ui.selectable_label(on, text).on_hover_text(&d.description).clicked() && !on {
                             for &i in indices {
                                 self.send(UiCmd::MoveStream(kind, i, d.name.clone()));
                             }
+                            if let Some(r) = route {
+                                let device = d.name.clone();
+                                self.edit_settings(|s| s.routes[r].device = device);
+                            }
                             ui.close();
+                        }
+                    }
+                    if let Some(m) = app {
+                        ui.separator();
+                        let mut always = route.is_some();
+                        let label = if input { "Always record from here" } else { "Always play here" };
+                        if ui.checkbox(&mut always, label).on_hover_text("Also when the app starts again").changed() {
+                            match route {
+                                Some(r) => self.edit_settings(|s| {
+                                    s.routes.remove(r);
+                                }),
+                                None => {
+                                    if let Some(d) = devices.iter().find(|d| d.index == current) {
+                                        let route = Route { app: m, device: d.name.clone(), input };
+                                        self.edit_settings(|s| s.routes.push(route));
+                                    }
+                                }
+                            }
                         }
                     }
                 });

@@ -102,6 +102,8 @@ pub struct App {
     control_search: String,
     scene_name: String,
     source_filter: String,
+    /// Name typed for a new bus.
+    new_bus: String,
     log_filter: String,
     log_warnings_only: bool,
     confirm: Option<Confirm>,
@@ -167,6 +169,7 @@ impl App {
             scene_name: String::new(),
             rename: None,
             source_filter: String::new(),
+            new_bus: String::new(),
             log_filter: String::new(),
             log_warnings_only: false,
             led_test: None,
@@ -212,6 +215,12 @@ impl App {
             }
         }
         drop(sh);
+        self.send(UiCmd::ProfileEdited);
+    }
+
+    /// Change settings from outside the Settings page (buses, routes).
+    fn edit_settings(&self, f: impl FnOnce(&mut crate::config::Settings)) {
+        f(&mut self.shared.lock().unwrap().store.settings);
         self.send(UiCmd::ProfileEdited);
     }
 

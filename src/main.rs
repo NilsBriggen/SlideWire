@@ -15,6 +15,7 @@ mod midi;
 mod obs;
 mod portal;
 mod profile;
+mod routing;
 mod tray;
 mod ui;
 

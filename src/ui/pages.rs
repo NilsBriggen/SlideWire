@@ -509,6 +509,27 @@ impl App {
     }
 }
 
+/// Pick a device by name from `options` (name, label); empty = `default`.
+fn device_combo(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    value: &mut String,
+    options: &[(String, String)],
+    default: &str,
+) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let text = options.iter().find(|(n, _)| n == value).map_or(default, |(_, l)| l.as_str());
+        egui::ComboBox::from_id_salt(id).selected_text(text).width(220.0).show_ui(ui, |ui| {
+            ui.selectable_value(value, String::new(), default);
+            for (name, l) in options {
+                ui.selectable_value(value, name.clone(), l);
+            }
+        });
+    });
+}
+
 fn action_editor(
     ui: &mut egui::Ui,
     cid: &str,
@@ -532,6 +553,8 @@ fn action_editor(
         ButtonAction::PushToTalk,
         ButtonAction::PushToMute,
         ButtonAction::Obs { op: crate::obs::ObsOp::ToggleRecord },
+        ButtonAction::Monitor { source: String::new(), sink: String::new() },
+        ButtonAction::EasyEffects { preset: String::new() },
     ];
     egui::ComboBox::from_id_salt(("action", cid)).selected_text(action.label()).width(240.0).show_ui(ui, |ui| {
         for k in kinds {
@@ -658,6 +681,45 @@ fn action_editor(
         }
         ButtonAction::PushToMute => {
             widgets::hint(ui, "The default microphone is muted while you hold the button.");
+        }
+        ButtonAction::Monitor { source, sink } => {
+            let sources: Vec<(String, String)> = audio
+                .sources
+                .iter()
+                .map(|d| (d.name.clone(), d.label.clone()))
+                .chain(
+                    audio
+                        .sinks
+                        .iter()
+                        .filter(|d| crate::routing::is_bus(&d.name))
+                        .map(|d| (d.monitor_source.clone(), format!("{} (bus)", d.label))),
+                )
+                .collect();
+            let sinks: Vec<(String, String)> = audio
+                .sinks
+                .iter()
+                .filter(|d| !crate::routing::is_bus(&d.name))
+                .map(|d| (d.name.clone(), d.label.clone()))
+                .collect();
+            device_combo(ui, ("monitor-src", cid), "Hear", source, &sources, "Default input");
+            device_combo(ui, ("monitor-sink", cid), "On", sink, &sinks, "Default output");
+            widgets::hint(ui, "Press to hear it live (wear headphones), press again to stop. The LED shows it's on.");
+        }
+        ButtonAction::EasyEffects { preset } => {
+            let presets = crate::routing::easyeffects_presets();
+            if presets.is_empty() {
+                widgets::hint(ui, "No EasyEffects presets found. Save one in EasyEffects first.");
+                ui.add(egui::TextEdit::singleline(preset).hint_text("Preset name").desired_width(220.0));
+            } else {
+                let text = if preset.is_empty() { "Pick…".to_string() } else { preset.clone() };
+                egui::ComboBox::from_id_salt(("ee-preset", cid)).selected_text(text).width(220.0).show_ui(ui, |ui| {
+                    for (name, input) in presets {
+                        let label = format!("{}  {name}", if input { icon::MICROPHONE } else { icon::SPEAKER_HIGH });
+                        ui.selectable_value(preset, name.clone(), label);
+                    }
+                });
+            }
+            widgets::hint(ui, "Two buttons with two presets (say, with and without noise suppression) make a switch.");
         }
         ButtonAction::Obs { op } => {
             use crate::obs::ObsOp;
