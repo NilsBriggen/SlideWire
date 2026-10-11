@@ -6,6 +6,7 @@ use std::f32::consts::PI;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
+use rust_i18n::t;
 
 use super::theme::{icon, *};
 use super::widgets;
@@ -297,7 +298,7 @@ fn nanokontrol2(ui: &mut Ui, p: &Profile, live: &LiveState) -> Option<String> {
 fn generic(ui: &mut Ui, p: &Profile, live: &LiveState) -> Option<String> {
     let mut clicked = None;
     if p.controls.is_empty() {
-        widgets::hint(ui, "No controls yet. Add one below and move it on your device.");
+        widgets::hint(ui, &t!("No controls yet. Add one below and move it on your device."));
         return None;
     }
     ui.horizontal_wrapped(|ui| {

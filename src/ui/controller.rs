@@ -1,6 +1,7 @@
 //! Controller page: live diagram, controls and groups.
 
 use eframe::egui::{self, RichText, Stroke};
+use rust_i18n::t;
 
 use super::App;
 use super::diagram::{self, LiveState};
@@ -33,8 +34,8 @@ impl App {
 
         widgets::page_header(
             ui,
-            "Controller",
-            Some("Touch a control on your device to see it light up. Click one to edit it."),
+            &t!("Controller"),
+            Some(&t!("Touch a control on your device to see it light up. Click one to edit it.")),
             |_| {},
         );
         egui::ScrollArea::vertical().id_salt("controller").auto_shrink([false, false]).show(ui, |ui| {
@@ -52,33 +53,33 @@ impl App {
             }
             ui.add_space(10.0);
 
-            widgets::card(ui, icon::PLUGS_CONNECTED, "Device", |ui| {
+            widgets::card(ui, icon::PLUGS_CONNECTED, &t!("Device"), |ui| {
                 egui::Grid::new("device").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
-                    ui.label("Profile name");
+                    ui.label(t!("Profile name"));
                     ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(280.0));
                     ui.end_row();
-                    ui.label("MIDI input");
+                    ui.label(t!("MIDI input"));
                     port_combo(ui, "in-port", &mut p.input, &ports_in);
                     ui.end_row();
-                    ui.label("MIDI output (LEDs)");
+                    ui.label(t!("MIDI output (LEDs)"));
                     port_combo(ui, "out-port", &mut p.output, &ports_out);
                     ui.end_row();
                 });
             });
             ui.add_space(10.0);
 
-            widgets::card(ui, icon::SLIDERS_HORIZONTAL, &format!("Controls ({})", p.controls.len()), |ui| {
+            widgets::card(ui, icon::SLIDERS_HORIZONTAL, &t!("Controls (%{count})", count = p.controls.len()), |ui| {
                 ui.horizontal(|ui| {
-                    if widgets::icon_button(ui, icon::PLUS, "Add control").clicked() {
+                    if widgets::icon_button(ui, icon::PLUS, &t!("Add control")).clicked() {
                         let id = crate::profile::new_id();
-                        p.controls.insert(id.clone(), Control { name: format!("Control {}", p.controls.len() + 1), ..Default::default() });
+                        p.controls.insert(id.clone(), Control { name: t!("Control %{number}", number = p.controls.len() + 1).to_string(), ..Default::default() });
                         learn_req = Some(Some(LearnRequest { control_id: id.clone() }));
                         self.expanded_control = Some(id);
                     }
-                    widgets::hint(ui, "New controls start listening: move the control on your device.");
+                    widgets::hint(ui, &t!("New controls start listening: move the control on your device."));
                 });
                 ui.add_space(4.0);
-                widgets::text_field(ui, &mut self.control_search, "Filter controls", Some(icon::MAGNIFYING_GLASS), 260.0);
+                widgets::text_field(ui, &mut self.control_search, &t!("Filter controls"), Some(icon::MAGNIFYING_GLASS), 260.0);
                 ui.add_space(4.0);
                 let search = self.control_search.trim().to_lowercase();
                 let mut remove = None;
@@ -137,24 +138,24 @@ impl App {
                                         ui.add(egui::TextEdit::singleline(&mut c.name).desired_width(150.0));
                                         widgets::chip(ui, &message_summary(c), pal().text_dim);
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            if widgets::icon_framed(ui, icon::TRASH, "Delete").clicked() {
+                                            if widgets::icon_framed(ui, icon::TRASH, &t!("Delete")).clicked() {
                                                 remove = Some(id.clone());
                                             }
-                                            if ui.selectable_label(open, icon::GEAR_SIX).on_hover_text("Edit").clicked() {
+                                            if ui.selectable_label(open, icon::GEAR_SIX).on_hover_text(t!("Edit")).clicked() {
                                                 self.expanded_control = if open { None } else { Some(id.clone()) };
                                             }
                                             if c.kind != ControlKind::Fader
-                                                && ui.button("Test").on_hover_text("Light it on the device").clicked()
+                                                && ui.button(t!("Test")).on_hover_text(t!("Light it on the device")).clicked()
                                             {
                                                 test = Some(id.clone());
                                             }
                                             let learn_text = if learning {
                                                 let t = ui.input(|i| i.time) as f32;
                                                 ui.ctx().request_repaint();
-                                                RichText::new(format!("{}  Listening…", icon::RECORD))
+                                                RichText::new(format!("{}  {}", icon::RECORD, t!("Listening…")))
                                                     .color(ASSIGN.gamma_multiply(0.6 + 0.4 * (t * 6.0).sin().abs()))
                                             } else {
-                                                RichText::new(format!("{}  Learn", icon::CROSSHAIR))
+                                                RichText::new(format!("{}  {}", icon::CROSSHAIR, t!("Learn")))
                                             };
                                             if ui.button(learn_text).clicked() {
                                                 learn_req = Some(if learning { None } else { Some(LearnRequest { control_id: id.clone() }) });
@@ -179,12 +180,12 @@ impl App {
             });
             ui.add_space(10.0);
 
-            widgets::card(ui, icon::SQUARES_FOUR, &format!("Groups ({})", p.groups.len()), |ui| {
+            widgets::card(ui, icon::SQUARES_FOUR, &t!("Groups (%{count})", count = p.groups.len()), |ui| {
                 ui.horizontal(|ui| {
-                    if widgets::icon_button(ui, icon::PLUS, "Add group").clicked() {
-                        p.groups.insert(crate::profile::new_id(), Group { name: format!("Group {}", p.groups.len() + 1), ..Default::default() });
+                    if widgets::icon_button(ui, icon::PLUS, &t!("Add group")).clicked() {
+                        p.groups.insert(crate::profile::new_id(), Group { name: t!("Group %{number}", number = p.groups.len() + 1).to_string(), ..Default::default() });
                     }
-                    widgets::hint(ui, "A group is one channel strip: faders set the volume, buttons mute / assign / run, outputs show the state.");
+                    widgets::hint(ui, &t!("A group is one channel strip: faders set the volume, buttons mute / assign / run, outputs show the state."));
                 });
                 let controls = p.controls.clone();
                 let mut remove_group = None;
@@ -193,9 +194,9 @@ impl App {
                     let title = group_title(g, current.get(gid.as_str()));
                     egui::CollapsingHeader::new(title).id_salt(gid.as_str()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label("Name");
+                            ui.label(t!("Name"));
                             ui.text_edit_singleline(&mut g.name);
-                            if widgets::icon_button(ui, icon::TRASH, "Delete group").clicked() {
+                            if widgets::icon_button(ui, icon::TRASH, &t!("Delete group")).clicked() {
                                 remove_group = Some(gid.clone());
                             }
                         });
@@ -226,7 +227,7 @@ impl App {
             self.edit_profile(|ap| *ap = p);
         }
         if let Some(name) = deleted {
-            self.toast(icon::TRASH, format!("Deleted {name}"), None, Some(super::ToastUndo::Edit));
+            self.toast(icon::TRASH, t!("Deleted %{name}", name = name).to_string(), None, Some(super::ToastUndo::Edit));
         }
         if let Some(id) = test {
             self.send(UiCmd::SendTest(id));
@@ -269,7 +270,13 @@ fn control_sections(p: &crate::profile::Profile) -> Vec<(String, Vec<String>)> {
 fn section_title(title: &str, count: usize, p: &crate::profile::Profile) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     let fmt = |font: egui::FontId, color| egui::TextFormat { font_id: font, color, ..Default::default() };
-    job.append(title, 0.0, fmt(semibold(13.5), pal().text));
+    // Section titles stay English internally; translate for display.
+    let shown = match title.strip_prefix("Channel ") {
+        Some(n) => t!("Channel %{number}", number = n),
+        None if title == "Other controls" => t!("Other controls"),
+        None => title.into(),
+    };
+    job.append(&shown, 0.0, fmt(semibold(13.5), pal().text));
     job.append(&format!("  ·  {count}"), 0.0, fmt(egui::FontId::proportional(13.0), pal().text_faint));
     if let Some(n) = title.strip_prefix("Channel ") {
         for (gid, g) in &p.groups {
@@ -280,7 +287,7 @@ fn section_title(title: &str, count: usize, p: &crate::profile::Profile) -> egui
             let targets = assigned_summary(p.current().get(gid));
             job.append(&format!("{kind} → "), 18.0, fmt(egui::FontId::proportional(12.5), pal().text_dim));
             let color = if targets.is_empty() { pal().text_faint } else { pal().accent };
-            let text = if targets.is_empty() { "nothing".to_string() } else { targets };
+            let text = if targets.is_empty() { t!("nothing").to_string() } else { targets };
             job.append(&text, 0.0, fmt(egui::FontId::proportional(12.5), color));
         }
     }
@@ -292,13 +299,13 @@ fn group_title(g: &Group, a: Option<&crate::profile::GroupSettings>) -> egui::te
     let mut job = egui::text::LayoutJob::default();
     let fmt = |font: egui::FontId, color| egui::TextFormat { font_id: font, color, ..Default::default() };
     job.append(&g.name, 0.0, fmt(semibold(14.0), pal().text));
-    let roles: Vec<&str> =
-        [(Role::Faders, "volume"), (Role::Mute, "mute"), (Role::Assign, "assign"), (Role::Run, "run")]
+    let roles: Vec<String> =
+        [(Role::Faders, t!("volume")), (Role::Mute, t!("mute")), (Role::Assign, t!("assign")), (Role::Run, t!("run"))]
             .into_iter()
             .filter(|(r, _)| !g.role(*r).is_empty())
-            .map(|(_, l)| l)
+            .map(|(_, l)| l.to_string())
             .collect();
-    let roles = if roles.is_empty() { "no controls".to_string() } else { roles.join(", ") };
+    let roles = if roles.is_empty() { t!("no controls").to_string() } else { roles.join(", ") };
     job.append(&roles, 14.0, fmt(egui::FontId::proportional(12.5), pal().text_dim));
     let targets = assigned_summary(a);
     if !targets.is_empty() {
@@ -317,11 +324,17 @@ fn assigned_summary(a: Option<&crate::profile::GroupSettings>) -> String {
 
 fn message_summary(c: &Control) -> String {
     let base = if c.command.has_control() {
-        format!("{} {} · ch {}", c.command.label(), c.control, c.channel + 1)
+        t!(
+            "%{message} %{number} · ch %{channel}",
+            message = c.command.label(),
+            number = c.control,
+            channel = c.channel + 1
+        )
+        .to_string()
     } else {
-        format!("{} · ch {}", c.command.label(), c.channel + 1)
+        t!("%{message} · ch %{channel}", message = c.command.label(), channel = c.channel + 1).to_string()
     };
-    if c.delta.is_some() { format!("{base} · relative") } else { base }
+    if c.delta.is_some() { t!("%{message} · relative", message = base).to_string() } else { base }
 }
 
 fn role_color(r: Role) -> egui::Color32 {
@@ -335,27 +348,27 @@ fn role_color(r: Role) -> egui::Color32 {
 
 fn edit_control(ui: &mut egui::Ui, id: &str, c: &mut Control) {
     egui::Grid::new(("edit", id)).num_columns(2).spacing([14.0, 6.0]).show(ui, |ui| {
-        ui.label("Type");
+        ui.label(t!("Type"));
         widgets::combo(("kind", id)).selected_text(c.kind.label()).width(140.0).show_ui(ui, |ui| {
             for k in ControlKind::ALL {
                 ui.selectable_value(&mut c.kind, k, k.label());
             }
         });
         ui.end_row();
-        ui.label("Message");
+        ui.label(t!("Message"));
         ui.horizontal(|ui| {
             widgets::combo(("cmd", id)).selected_text(c.command.label()).width(110.0).show_ui(ui, |ui| {
                 for k in Command::ALL {
                     ui.selectable_value(&mut c.command, k, k.label());
                 }
             });
-            ui.label("channel");
+            ui.label(t!("channel"));
             let mut ch = c.channel as u32 + 1;
             if ui.add(egui::DragValue::new(&mut ch).range(1..=16)).changed() {
                 c.channel = (ch - 1) as u8;
             }
             if c.command.has_control() {
-                ui.label("number");
+                ui.label(t!("number"));
                 ui.add(egui::DragValue::new(&mut c.control).range(0..=127));
             }
         });
@@ -363,10 +376,10 @@ fn edit_control(ui: &mut egui::Ui, id: &str, c: &mut Control) {
         let default_max = c.command.default_max();
         let mut min = c.min();
         let mut max = c.max();
-        ui.label("Range");
+        ui.label(t!("Range"));
         ui.horizontal(|ui| {
             let a = ui.add(egui::DragValue::new(&mut min).range(0..=default_max)).changed();
-            ui.label("to");
+            ui.label(t!("to"));
             let b = ui.add(egui::DragValue::new(&mut max).range(0..=default_max)).changed();
             if a || b {
                 c.min_value = (min != 0).then_some(min);
@@ -376,22 +389,22 @@ fn edit_control(ui: &mut egui::Ui, id: &str, c: &mut Control) {
         ui.end_row();
         match c.kind {
             ControlKind::Fader => {
-                ui.label("Encoder");
+                ui.label(t!("Encoder"));
                 ui.vertical(|ui| {
                     let mut relative = c.delta.is_some();
-                    if ui.checkbox(&mut relative, "Endless encoder (sends relative steps)").changed() {
+                    if ui.checkbox(&mut relative, t!("Endless encoder (sends relative steps)")).changed() {
                         c.delta = relative.then(|| Delta::new(1, 65));
                     }
                     if let Some(d) = &mut c.delta {
                         ui.horizontal(|ui| {
-                            ui.label("one click up =");
+                            ui.label(t!("one click up ="));
                             ui.add(egui::DragValue::new(&mut d.up).range(0..=127));
-                            ui.label("down =");
+                            ui.label(t!("down ="));
                             ui.add(egui::DragValue::new(&mut d.down).range(0..=127));
                         });
                         let mut steps = c.steps.unwrap_or(0);
                         ui.horizontal(|ui| {
-                            ui.label("clicks from 0 to 100% (0 = default)");
+                            ui.label(t!("clicks from 0 to 100% (0 = default)"));
                             if ui.add(egui::DragValue::new(&mut steps).range(0..=1000)).changed() {
                                 c.steps = (steps > 0).then_some(steps);
                             }
@@ -401,19 +414,19 @@ fn edit_control(ui: &mut egui::Ui, id: &str, c: &mut Control) {
                 ui.end_row();
             }
             ControlKind::Button => {
-                ui.label("Button");
+                ui.label(t!("Button"));
                 ui.vertical(|ui| {
                     let mut has_push = c.push_value.is_some();
                     ui.horizontal(|ui| {
-                        if ui.checkbox(&mut has_push, "Only react to value").changed() {
+                        if ui.checkbox(&mut has_push, t!("Only react to value")).changed() {
                             c.push_value = has_push.then_some(127);
                         }
                         if let Some(v) = &mut c.push_value {
                             ui.add(egui::DragValue::new(v).range(1..=127));
                         }
                     });
-                    ui.checkbox(&mut c.velocity_sensitive, "Any velocity counts as a press");
-                    ui.checkbox(&mut c.automatic_indicator, "Has its own LED (same address)");
+                    ui.checkbox(&mut c.velocity_sensitive, t!("Any velocity counts as a press"));
+                    ui.checkbox(&mut c.automatic_indicator, t!("Has its own LED (same address)"));
                 });
                 ui.end_row();
             }
@@ -424,9 +437,11 @@ fn edit_control(ui: &mut egui::Ui, id: &str, c: &mut Control) {
 
 pub(super) fn port_combo(ui: &mut egui::Ui, id: &str, value: &mut String, ports: &[String]) {
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(value).desired_width(220.0).hint_text("port name (part of it is enough)"));
-        widgets::combo(id).selected_text("Pick").width(64.0).show_ui(ui, |ui| {
-            if ui.selectable_label(value.is_empty(), "(none)").clicked() {
+        ui.add(
+            egui::TextEdit::singleline(value).desired_width(220.0).hint_text(t!("port name (part of it is enough)")),
+        );
+        widgets::combo(id).selected_text(t!("Pick")).width(64.0).show_ui(ui, |ui| {
+            if ui.selectable_label(value.is_empty(), t!("(none)")).clicked() {
                 value.clear();
             }
             for p in ports.iter().filter(|p| !p.starts_with(crate::midi::CLIENT) && !p.contains("Midi Through")) {
@@ -486,7 +501,7 @@ fn role_editor(
             }
         }
         if !any {
-            ui.label("No matching controls");
+            ui.label(t!("No matching controls"));
         }
     });
     if let Some(cid) = add {

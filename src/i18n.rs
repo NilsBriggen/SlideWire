@@ -50,6 +50,6 @@ mod tests {
     #[test]
     fn interpolation_and_fallback() {
         // A key that isn't translated comes back as itself, filled in.
-        assert_eq!(rust_i18n::t!("Bank %{n}", n = 3), "Bank 3");
+        assert_eq!(rust_i18n::t!("Bank %{bank}", bank = 3), "Bank 3");
     }
 }

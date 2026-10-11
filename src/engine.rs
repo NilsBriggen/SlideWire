@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use regex::Regex;
+use rust_i18n::t;
 
 use crate::audio::{AppStream, AudioCmd, AudioHandle, AudioState, Kind, MeterKey};
 use crate::config::Store;
@@ -599,7 +600,9 @@ impl Engine {
                 sh.learn = None;
                 sh.store.touch(&id);
                 sh.log(format!("Learned {}", msg.describe()));
-                sh.notify(Notice::Info(format!("{name} is now {}", msg.address())));
+                sh.notify(Notice::Info(
+                    t!("%{control} is now %{address}", control = name, address = msg.address()).to_string(),
+                ));
             }
             sh.repaint();
             return;
@@ -734,11 +737,11 @@ impl Engine {
                 }
                 if osd {
                     let (icon, text) = if default_muted {
-                        ("audio-input-microphone", "Microphones on")
+                        ("audio-input-microphone", t!("Microphones on"))
                     } else {
-                        ("microphone-sensitivity-muted", "Microphones muted")
+                        ("microphone-sensitivity-muted", t!("Microphones muted"))
                     };
-                    self.osd.show_text(icon, text);
+                    self.osd.show_text(icon, &text);
                 }
             }
             ButtonAction::PushToTalk => self.mute_default_input(false),
@@ -749,7 +752,10 @@ impl Engine {
                 match crate::routing::easyeffects_load(preset) {
                     Ok(()) => {
                         if sh.store.settings.osd {
-                            self.osd.show_text("com.github.wwmm.easyeffects", &format!("EasyEffects: {preset}"));
+                            self.osd.show_text(
+                                "com.github.wwmm.easyeffects",
+                                &t!("EasyEffects: %{preset}", preset = preset),
+                            );
                         }
                     }
                     Err(e) => {
@@ -823,7 +829,7 @@ impl Engine {
         self.waiting.clear();
         self.mark_pickup();
         if osd {
-            self.osd.show_text("view-grid", &format!("Bank {}", new + 1));
+            self.osd.show_text("view-grid", &t!("Bank %{bank}", bank = new + 1));
         }
         self.sent.clear();
         self.feedback();
@@ -892,7 +898,7 @@ impl Engine {
         sh.notify(Notice::SceneRecalled(name.to_string()));
         drop(sh);
         if self.shared.lock().unwrap().store.settings.osd {
-            self.osd.show_text("view-media-playlist", &format!("Scene: {name}"));
+            self.osd.show_text("view-media-playlist", &t!("Scene: %{scene}", scene = name));
         }
     }
 
@@ -1205,8 +1211,8 @@ impl Engine {
             }
         }
         if self.shared.lock().unwrap().store.settings.osd {
-            let text = if on { "Monitoring on" } else { "Monitoring off" };
-            self.osd.show_text("audio-headphones", text);
+            let text = if on { t!("Monitoring on") } else { t!("Monitoring off") };
+            self.osd.show_text("audio-headphones", &text);
         }
     }
 
@@ -1330,9 +1336,11 @@ impl Engine {
                 let text = match res.first() {
                     Some(r) if res.len() == 1 => r.label.clone(),
                     Some(r) => format!("{} +{}", r.label, res.len() - 1),
-                    None => {
-                        format!("{} (nothing playing)", profile.groups.get(gid).map(|g| g.name.as_str()).unwrap_or(""))
-                    }
+                    None => t!(
+                        "%{group} (nothing playing)",
+                        group = profile.groups.get(gid).map(|g| g.name.as_str()).unwrap_or("")
+                    )
+                    .to_string(),
                 };
                 let icon = res
                     .first()
@@ -1360,7 +1368,8 @@ impl Engine {
             let icon = if mute { "audio-volume-muted" } else { "audio-volume-high" };
             let label = if res.len() == 1 { res[0].label.clone() } else { profile.groups[gid].name.clone() };
             let pct = if mute { 0 } else { (res[0].volume * 100.0).round() as i32 };
-            self.osd.show(icon, pct, &format!("{label}{}", if mute { " — muted" } else { "" }));
+            let text = if mute { t!("%{target} — muted", target = label).to_string() } else { label };
+            self.osd.show(icon, pct, &text);
         }
     }
 

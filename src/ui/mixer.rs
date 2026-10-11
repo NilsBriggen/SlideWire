@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use rust_i18n::t;
+
 use eframe::egui::{self, RichText, Sense, Stroke, StrokeKind, Vec2, vec2};
 
 use super::App;
@@ -80,16 +82,16 @@ impl App {
         let compact = ui.available_width() < 560.0 + 72.0 * bank_count as f32;
         ui.horizontal(|ui| {
             if !compact {
-                ui.label(RichText::new("Console").font(semibold(17.0)));
+                ui.label(RichText::new(t!("Console")).font(semibold(17.0)));
                 ui.add_space(6.0);
             }
             self.bank_tabs(ui, bank, bank_count);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let label = if self.show_sources { "Hide sources" } else { "Show sources" };
+                let label = if self.show_sources { t!("Hide sources") } else { t!("Show sources") };
                 let toggle = if compact {
-                    widgets::icon_framed(ui, icon::SQUARES_FOUR, label)
+                    widgets::icon_framed(ui, icon::SQUARES_FOUR, &label)
                 } else {
-                    widgets::icon_button(ui, icon::SQUARES_FOUR, label)
+                    widgets::icon_button(ui, icon::SQUARES_FOUR, &label)
                 };
                 if toggle.clicked() {
                     self.show_sources = !self.show_sources;
@@ -133,7 +135,7 @@ impl App {
             }
             // Other controllers: one row per kind of strip.
             let (knobs, faders): (Vec<&StripView>, Vec<&StripView>) = rest.into_iter().partition(|s| s.knob);
-            for (row, label, height) in [(&knobs, "Rotary", KNOB_H), (&faders, "Faders", FADER_H)] {
+            for (row, label, height) in [(&knobs, t!("Rotary"), KNOB_H), (&faders, t!("Faders"), FADER_H)] {
                 if row.is_empty() {
                     continue;
                 }
@@ -164,17 +166,17 @@ impl App {
         ui.spacing_mut().item_spacing.x = 4.0;
         for i in 0..count {
             let r = ui
-                .selectable_label(i == bank, format!("Bank {}", i + 1))
-                .on_hover_text("Each bank has its own assignments. Right-click to clear or remove.");
+                .selectable_label(i == bank, t!("Bank %{bank}", bank = i + 1))
+                .on_hover_text(t!("Each bank has its own assignments. Right-click to clear or remove."));
             if r.clicked() && i != bank {
                 self.send(UiCmd::SetBank(i));
             }
             r.context_menu(|ui| {
-                let label = if i == 0 { "Clear bank 1" } else { "Remove this bank" };
+                let label = if i == 0 { t!("Clear bank 1") } else { t!("Remove this bank") };
                 if ui.button(format!("{}  {label}", icon::TRASH)).clicked() {
                     self.confirm = Some(super::Confirm {
-                        title: format!("{label}?"),
-                        body: format!("Everything assigned in bank {} is removed.", i + 1),
+                        title: if i == 0 { t!("Clear bank 1?") } else { t!("Remove this bank?") }.to_string(),
+                        body: t!("Everything assigned in bank %{bank} is removed.", bank = i + 1).to_string(),
                         button: label.into(),
                         action: super::ConfirmAction::RemoveBank(i),
                         alt: None,
@@ -183,7 +185,7 @@ impl App {
                 }
             });
         }
-        if widgets::icon_framed(ui, icon::PLUS, "Add a bank").clicked() {
+        if widgets::icon_framed(ui, icon::PLUS, &t!("Add a bank")).clicked() {
             self.edit_profile(|p| {
                 p.banks.push(Default::default());
                 p.bank = p.bank_count() - 1;
@@ -194,7 +196,7 @@ impl App {
         if count == 1 && room > 160.0 {
             ui.scope(|ui| {
                 ui.set_max_width(room);
-                let text = "Drag apps and devices from the right onto a strip, or use the S button.";
+                let text = t!("Drag apps and devices from the right onto a strip, or use the S button.");
                 ui.add(egui::Label::new(RichText::new(text).size(12.5).color(pal().text_dim)).truncate());
             });
         }
@@ -203,30 +205,32 @@ impl App {
     /// Recall, save and delete scenes (volume and mute snapshots).
     fn scenes_menu(&mut self, ui: &mut egui::Ui, scenes: &[String], compact: bool) {
         let button = if compact {
-            widgets::icon_framed(ui, icon::BOOKMARKS_SIMPLE, "Scenes")
+            widgets::icon_framed(ui, icon::BOOKMARKS_SIMPLE, &t!("Scenes"))
         } else {
-            widgets::icon_button(ui, icon::BOOKMARKS_SIMPLE, "Scenes")
+            widgets::icon_button(ui, icon::BOOKMARKS_SIMPLE, &t!("Scenes"))
         };
         // Stays open while typing a name (a plain menu closes on any click inside).
         egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.set_width(260.0);
             if scenes.is_empty() {
-                widgets::hint(ui, "Save the current volumes and mutes to recall them later.");
+                widgets::hint(ui, &t!("Save the current volumes and mutes to recall them later."));
             }
             let mut delete = None;
             for name in scenes {
                 ui.horizontal(|ui| {
-                    if ui.button(format!("{}  {name}", icon::PLAY)).on_hover_text("Recall").clicked() {
+                    if ui.button(format!("{}  {name}", icon::PLAY)).on_hover_text(t!("Recall")).clicked() {
                         self.send(UiCmd::RecallScene(name.clone()));
                         ui.close();
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::icon_framed(ui, icon::TRASH, "Delete").clicked() {
+                        if widgets::icon_framed(ui, icon::TRASH, &t!("Delete")).clicked() {
                             delete = Some(name.clone());
                         }
-                        if widgets::icon_framed(ui, icon::FLOPPY_DISK, "Overwrite with the current volumes").clicked() {
+                        if widgets::icon_framed(ui, icon::FLOPPY_DISK, &t!("Overwrite with the current volumes"))
+                            .clicked()
+                        {
                             self.send(UiCmd::SaveScene(name.clone()));
-                            self.flash(format!("Saved scene \"{name}\""));
+                            self.flash(t!("Saved scene \"%{name}\"", name = name));
                         }
                     });
                 });
@@ -235,22 +239,29 @@ impl App {
                 self.edit_profile(|p| {
                     p.scenes.shift_remove(&name);
                 });
-                self.toast(icon::TRASH, format!("Deleted scene \"{name}\""), None, Some(super::ToastUndo::Edit));
+                self.toast(
+                    icon::TRASH,
+                    t!("Deleted scene \"%{name}\"", name = name),
+                    None,
+                    Some(super::ToastUndo::Edit),
+                );
             }
             ui.separator();
             ui.horizontal(|ui| {
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.scene_name).hint_text("New scene name").desired_width(150.0),
+                    egui::TextEdit::singleline(&mut self.scene_name)
+                        .hint_text(t!("New scene name"))
+                        .desired_width(150.0),
                 );
                 let name = self.scene_name.trim().to_string();
-                if ui.add_enabled(!name.is_empty(), egui::Button::new("Save")).clicked() {
+                if ui.add_enabled(!name.is_empty(), egui::Button::new(t!("Save"))).clicked() {
                     self.send(UiCmd::SaveScene(name.clone()));
-                    self.flash(format!("Saved scene \"{name}\""));
+                    self.flash(t!("Saved scene \"%{name}\"", name = name));
                     self.scene_name.clear();
                     ui.close();
                 }
             });
-            widgets::hint(ui, "Buttons can recall scenes too (Buttons page).");
+            widgets::hint(ui, &t!("Buttons can recall scenes too (Buttons page)."));
         });
     }
 
@@ -292,9 +303,9 @@ impl App {
         let painter = ui.painter_at(rect.expand(12.0));
         widgets::bevel_panel(&painter, rect, 8, pal().strip_top, pal().strip_bottom);
         let head = egui::Rect::from_min_size(rect.min, vec2(rect.width(), 28.0));
-        painter.text(head.center(), egui::Align2::CENTER_CENTER, "Master", semibold(14.0), pal().text);
+        painter.text(head.center(), egui::Align2::CENTER_CENTER, t!("Master"), semibold(14.0), pal().text);
         let Some(sink) = audio.sinks.iter().find(|d| d.name == audio.default_sink) else {
-            painter.text(rect.center(), egui::Align2::CENTER_CENTER, "No output", mono(11.0), pal().text_faint);
+            painter.text(rect.center(), egui::Align2::CENTER_CENTER, t!("No output"), mono(11.0), pal().text_faint);
             return;
         };
         let (curve, boost, peak) = {
@@ -312,10 +323,10 @@ impl App {
             let img = self.icons.image(&[sink.icon.clone(), "audio-speakers".into()]);
             let lcd = widgets::lcd(ui, vec2(inner.width(), 30.0), img, &sink.label, sink.mute, None)
                 .interact(Sense::click())
-                .on_hover_text(format!("{}\nClick to choose the default output", sink.description))
+                .on_hover_text(format!("{}\n{}", sink.description, t!("Click to choose the default output")))
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             egui::Popup::menu(&lcd).show(|ui| {
-                ui.label(RichText::new("Default output").font(semibold(13.0)));
+                ui.label(RichText::new(t!("Default output")).font(semibold(13.0)));
                 for d in &audio.sinks {
                     let on = d.name == sink.name;
                     let text = format!("{}  {}", if on { icon::CHECK } else { "    " }, d.label);
@@ -326,8 +337,8 @@ impl App {
                 }
             });
             let led = vec2(36.0, 22.0);
-            if widgets::led_button(ui, "M", sink.mute, MUTE, led, "Mute the output")
-                .on_hover_text("Mute the output")
+            if widgets::led_button(ui, "M", sink.mute, MUTE, led, &t!("Mute the output"))
+                .on_hover_text(t!("Mute the output"))
                 .clicked()
             {
                 self.send(UiCmd::SetStreamMute(Kind::Sink, sink.index, !sink.mute));
@@ -339,7 +350,7 @@ impl App {
                     ui.add_space((inner.width() - 52.0 - 10.0 - 8.0) / 2.0);
                     let color = if sink.mute { pal().accent.gamma_multiply(0.35) } else { pal().accent };
                     let marks = mapping::db_marks(&mapping::Range { min: 0.0, top: boost, curve });
-                    let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, None, &marks, "Master volume");
+                    let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, None, &marks, &t!("Master volume"));
                     widgets::segment_meter(ui, peak, 0.0, vec2(10.0, h - 20.0));
                     r.changed()
                 })
@@ -347,7 +358,7 @@ impl App {
             if changed {
                 self.send(UiCmd::SetStreamVolume(Kind::Sink, sink.index, mapping::curve(pos, curve) * boost));
             }
-            let text = if sink.mute { "MUTE".to_string() } else { format!("{:>3.0}%", sink.volume * 100.0) };
+            let text = if sink.mute { t!("MUTE").to_string() } else { format!("{:>3.0}%", sink.volume * 100.0) };
             let color = if sink.mute { pal().mute_text } else { pal().readout };
             ui.label(RichText::new(text).font(mono(13.0)).color(color));
             if !sink.mute {
@@ -418,9 +429,9 @@ impl App {
                 } else if !s.targets.is_empty() {
                     s.targets.iter().map(|t| t.label()).collect::<Vec<_>>().join(" + ")
                 } else if dragging {
-                    "drop here".into()
+                    t!("drop here").into()
                 } else {
-                    "empty".into()
+                    t!("empty").into()
                 };
                 let img = s
                     .icon
@@ -492,11 +503,11 @@ impl App {
                     if s.ducked && !s.muted {
                         ui.add_space(-6.0);
                         ui.label(
-                            RichText::new(format!("{} ducked", icon::ARROW_DOWN))
+                            RichText::new(format!("{} {}", icon::ARROW_DOWN, t!("ducked")))
                                 .font(mono(10.5))
                                 .color(pal().warn_text),
                         )
-                        .on_hover_text("Turned down while a strip set to duck others is playing");
+                        .on_hover_text(t!("Turned down while a strip set to duck others is playing"));
                     } else if let Some(v) = s.volume.filter(|_| !s.muted) {
                         ui.add_space(-6.0);
                         ui.label(RichText::new(db_text(v)).font(mono(10.5)).color(pal().text_faint));
@@ -567,14 +578,17 @@ impl App {
     /// S (assign menu), M (mute) and, with `run`, R buttons.
     fn strip_buttons(&mut self, ui: &mut egui::Ui, s: &StripView, audio: &AudioState, size: Vec2, run: bool) {
         let name = strip_name(s);
-        let s_resp =
-            widgets::led_button(ui, "S", s.assigned, ASSIGN, size, &format!("Assign {name}")).on_hover_text("Assign");
-        if widgets::led_button(ui, "M", s.muted, MUTE, size, &format!("Mute {name}")).on_hover_text("Mute").clicked() {
+        let s_resp = widgets::led_button(ui, "S", s.assigned, ASSIGN, size, &t!("Assign %{strip}", strip = name))
+            .on_hover_text(t!("Assign"));
+        if widgets::led_button(ui, "M", s.muted, MUTE, size, &t!("Mute %{strip}", strip = name))
+            .on_hover_text(t!("Mute"))
+            .clicked()
+        {
             self.send(UiCmd::ToggleGroupMute(s.id.clone()));
         }
         if run
-            && widgets::led_button(ui, "R", s.running, RUN, size, &format!("Run {name}"))
-                .on_hover_text("Run: make the device default / start the app")
+            && widgets::led_button(ui, "R", s.running, RUN, size, &t!("Run %{strip}", strip = name))
+                .on_hover_text(t!("Run: make the device default / start the app"))
                 .clicked()
         {
             self.send(UiCmd::PressRun(s.id.clone()));
@@ -603,9 +617,9 @@ impl App {
         ui.set_width(300.0);
         let title = s.label.as_deref().unwrap_or(&s.name);
         ui.label(RichText::new(format!("{}  {title}", icon::TARGET)).font(semibold(14.0)));
-        section_label(ui, "Controls");
+        section_label(ui, &t!("Controls"));
         if s.targets.is_empty() {
-            widgets::hint(ui, "Nothing assigned yet.");
+            widgets::hint(ui, &t!("Nothing assigned yet."));
         }
         let mut remove = None;
         for (i, t) in s.targets.iter().enumerate() {
@@ -615,7 +629,7 @@ impl App {
                 }
                 ui.label(t.label());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::icon_framed(ui, icon::X, "Remove").clicked() {
+                    if widgets::icon_framed(ui, icon::X, &t!("Remove")).clicked() {
                         remove = Some(i);
                     }
                 });
@@ -630,20 +644,25 @@ impl App {
             });
             let what = s.targets[i].label();
             let strip = s.label.as_deref().unwrap_or(&s.name);
-            self.toast(icon::TRASH, format!("Removed {what} from {strip}"), None, Some(super::ToastUndo::Edit));
+            self.toast(
+                icon::TRASH,
+                t!("Removed %{what} from %{strip}", what = what, strip = strip),
+                None,
+                Some(super::ToastUndo::Edit),
+            );
         }
-        ui.menu_button(format!("{}  Add…", icon::PLUS), |ui| self.target_menu(ui, &s.id, audio));
-        section_label(ui, "Range");
+        ui.menu_button(format!("{}  {}", icon::PLUS, t!("Add…")), |ui| self.target_menu(ui, &s.id, audio));
+        section_label(ui, &t!("Range"));
         self.range_menu(ui, &s.id);
         self.identity_menu(ui, s, audio);
         self.relearn_menu(ui, &s.id);
         ui.horizontal(|ui| {
-            ui.label("Show as");
+            ui.label(t!("Show as"));
             let gid = s.id.clone();
-            if ui.selectable_label(!s.knob, "Fader").clicked() {
+            if ui.selectable_label(!s.knob, t!("Fader")).clicked() {
                 self.edit_profile(|p| p.assignments.entry(gid.clone()).or_default().widget = Some(Widget::Fader));
             }
-            if ui.selectable_label(s.knob, "Knob").clicked() {
+            if ui.selectable_label(s.knob, t!("Knob")).clicked() {
                 self.edit_profile(|p| p.assignments.entry(gid).or_default().widget = Some(Widget::Knob));
             }
         });
@@ -656,10 +675,10 @@ impl App {
             let Some(p) = sh.active() else { return };
             let Some(g) = p.groups.get(gid) else { return };
             let roles = [
-                ("Fader or knob", &g.faders),
-                ("Mute button", &g.mute),
-                ("Assign button", &g.assign),
-                ("Run button", &g.run),
+                (t!("Fader or knob"), &g.faders),
+                (t!("Mute button"), &g.mute),
+                (t!("Assign button"), &g.assign),
+                (t!("Run button"), &g.run),
             ];
             roles
                 .iter()
@@ -671,8 +690,8 @@ impl App {
         if controls.is_empty() {
             return;
         }
-        ui.menu_button(format!("{}  Learn controls", icon::CROSSHAIR), |ui| {
-            widgets::hint(ui, "Pick one, then touch the control on your controller.");
+        ui.menu_button(format!("{}  {}", icon::CROSSHAIR, t!("Learn controls")), |ui| {
+            widgets::hint(ui, &t!("Pick one, then touch the control on your controller."));
             for (id, label) in controls {
                 if ui.button(label).clicked() {
                     self.learn(&id);
@@ -685,12 +704,12 @@ impl App {
     /// Name, colour and icon of the strip, ducking, and clearing it.
     fn identity_menu(&mut self, ui: &mut egui::Ui, s: &StripView, audio: &AudioState) {
         let gid = s.id.clone();
-        section_label(ui, "Look");
+        section_label(ui, &t!("Look"));
         if self.rename.as_ref().is_none_or(|(id, _)| *id != gid) {
             self.rename = Some((gid.clone(), s.label.clone().unwrap_or_default()));
         }
         ui.horizontal(|ui| {
-            ui.label("Name");
+            ui.label(t!("Name"));
             let (_, text) = self.rename.as_mut().unwrap();
             let r = ui.add(egui::TextEdit::singleline(text).hint_text(&s.name).desired_width(200.0));
             if r.changed() {
@@ -700,10 +719,10 @@ impl App {
             }
         });
         ui.horizontal(|ui| {
-            ui.label("Colour");
+            ui.label(t!("Colour"));
             ui.spacing_mut().item_spacing.x = 0.0;
             let mut pick = None;
-            if widgets::swatch(ui, pal().accent, s.color.is_none(), "Accent colour").clicked() {
+            if widgets::swatch(ui, pal().accent, s.color.is_none(), &t!("Accent colour")).clicked() {
                 pick = Some(None);
             }
             for (i, (c, name)) in STRIP_COLORS.iter().enumerate() {
@@ -717,15 +736,15 @@ impl App {
             }
         });
         ui.horizontal(|ui| {
-            ui.label("Icon");
+            ui.label(t!("Icon"));
             let current = s.icon.as_ref().and_then(|i| self.icons.image(std::slice::from_ref(i)));
             if let Some(img) = current {
                 ui.add(img.fit_to_exact_size(Vec2::splat(20.0)));
             } else {
-                widgets::hint(ui, "Automatic");
+                widgets::hint(ui, &t!("Automatic"));
             }
-            ui.menu_button("Change", |ui| {
-                if ui.button("Automatic (from what's assigned)").clicked() {
+            ui.menu_button(t!("Change"), |ui| {
+                if ui.button(t!("Automatic (from what's assigned)")).clicked() {
                     let gid = gid.clone();
                     self.edit_profile(|p| p.current_mut().entry(gid).or_default().icon = None);
                     ui.close();
@@ -764,24 +783,24 @@ impl App {
             });
         });
         // Ducking: this strip turns the other apps down while it plays.
-        section_label(ui, "Ducking");
+        section_label(ui, &t!("Ducking"));
         let duck = {
             let sh = self.shared.lock().unwrap();
             sh.active().and_then(|p| p.current().get(&gid)).and_then(|a| a.duck)
         };
         let mut on = duck.is_some();
-        if widgets::toggle(ui, &mut on, "Turn other apps down while this plays").changed() {
+        if widgets::toggle(ui, &mut on, &t!("Turn other apps down while this plays")).changed() {
             let gid = gid.clone();
             self.edit_profile(|p| p.current_mut().entry(gid).or_default().duck = on.then(Default::default));
         }
         if let Some(mut d) = duck {
             let before = d;
             ui.horizontal(|ui| {
-                ui.label("By");
+                ui.label(t!("By"));
                 ui.add(egui::Slider::new(&mut d.amount_db, -30.0..=-3.0).step_by(1.0).suffix(" dB"));
             });
             ui.horizontal(|ui| {
-                ui.label("When louder than");
+                ui.label(t!("When louder than"));
                 ui.add(
                     egui::Slider::new(&mut d.threshold, 0.005..=0.3)
                         .logarithmic(true)
@@ -794,7 +813,7 @@ impl App {
             }
         }
         let has_any = !s.targets.is_empty() || s.label.is_some() || s.color.is_some() || s.icon.is_some();
-        if ui.add_enabled(has_any, egui::Button::new(format!("{}  Clear strip", icon::ERASER))).clicked() {
+        if ui.add_enabled(has_any, egui::Button::new(format!("{}  {}", icon::ERASER, t!("Clear strip")))).clicked() {
             let gid = gid.clone();
             self.edit_profile(|p| {
                 if let Some(a) = p.current_mut().get_mut(&gid) {
@@ -806,7 +825,7 @@ impl App {
             });
             self.rename = None;
             let strip = s.label.as_deref().unwrap_or(&s.name).to_string();
-            self.toast(icon::ERASER, format!("Cleared {strip}"), None, Some(super::ToastUndo::Edit));
+            self.toast(icon::ERASER, t!("Cleared %{strip}", strip = strip), None, Some(super::ToastUndo::Edit));
             ui.close();
         }
         ui.separator();
@@ -829,7 +848,7 @@ impl App {
                 ui.close();
             }
         }
-        ui.menu_button(format!("{}  Application", icon::MUSIC_NOTES), |ui| {
+        ui.menu_button(format!("{}  {}", icon::MUSIC_NOTES, t!("Application")), |ui| {
             let mut seen = HashSet::new();
             for a in &audio.apps {
                 let pattern = a.pattern();
@@ -845,10 +864,10 @@ impl App {
                 }
             }
             if seen.is_empty() {
-                widgets::hint(ui, "No apps are playing audio");
+                widgets::hint(ui, &t!("No apps are playing audio"));
             }
         });
-        ui.menu_button(format!("{}  Application recording", icon::MICROPHONE), |ui| {
+        ui.menu_button(format!("{}  {}", icon::MICROPHONE, t!("Application recording")), |ui| {
             let mut seen = HashSet::new();
             for a in &audio.app_inputs {
                 let pattern = a.pattern();
@@ -864,10 +883,10 @@ impl App {
                 }
             }
             if seen.is_empty() {
-                widgets::hint(ui, "No apps are recording");
+                widgets::hint(ui, &t!("No apps are recording"));
             }
         });
-        ui.menu_button(format!("{}  Output device", icon::SPEAKER_HIGH), |ui| {
+        ui.menu_button(format!("{}  {}", icon::SPEAKER_HIGH, t!("Output device")), |ui| {
             for d in &audio.sinks {
                 if ui.button(&d.description).clicked() {
                     self.add_target(gid, Target::Output { name: d.name.clone(), label: d.description.clone() });
@@ -875,7 +894,7 @@ impl App {
                 }
             }
         });
-        ui.menu_button(format!("{}  Input device", icon::MICROPHONE_STAGE), |ui| {
+        ui.menu_button(format!("{}  {}", icon::MICROPHONE_STAGE, t!("Input device")), |ui| {
             for d in &audio.sources {
                 if ui.button(&d.description).clicked() {
                     self.add_target(gid, Target::Input { name: d.name.clone(), label: d.description.clone() });
@@ -884,11 +903,11 @@ impl App {
             }
         });
         ui.add_space(4.0);
-        widgets::hint(ui, "Match apps by name (* wildcard):");
+        widgets::hint(ui, &t!("Match apps by name (* wildcard):"));
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut self.custom_pattern).desired_width(140.0).hint_text("firefox*"));
-            ui.checkbox(&mut self.custom_regex, "regex");
-            if widgets::icon_framed(ui, icon::PLUS, "Add").clicked() && !self.custom_pattern.trim().is_empty() {
+            ui.checkbox(&mut self.custom_regex, t!("regex"));
+            if widgets::icon_framed(ui, icon::PLUS, &t!("Add")).clicked() && !self.custom_pattern.trim().is_empty() {
                 let pattern = self.custom_pattern.trim().to_string();
                 self.add_target(
                     gid,
@@ -910,16 +929,16 @@ impl App {
         let (mut min, mut max, mut curve) = before;
         let pct = |v: f64, _: std::ops::RangeInclusive<usize>| format!("{:.0}%", v * 100.0);
         egui::Grid::new(("range", gid)).num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-            ui.label("Bottom");
+            ui.label(t!("Bottom"));
             ui.add(egui::Slider::new(&mut min, 0.0..=0.95).custom_formatter(pct));
             ui.end_row();
-            ui.label("Top");
+            ui.label(t!("Top"));
             ui.add(egui::Slider::new(&mut max, 0.05..=1.0).custom_formatter(pct));
             ui.end_row();
-            ui.label("Curve");
+            ui.label(t!("Curve"));
             ui.horizontal(|ui| {
                 let mut own = curve.is_some();
-                if ui.checkbox(&mut own, "own").on_hover_text("Use a curve just for this strip").changed() {
+                if ui.checkbox(&mut own, t!("own")).on_hover_text(t!("Use a curve just for this strip")).changed() {
                     curve = own.then_some(global_curve);
                 }
                 match &mut curve {
@@ -927,7 +946,7 @@ impl App {
                         ui.add(egui::Slider::new(c, 0.5..=3.0).step_by(0.1).fixed_decimals(1));
                     }
                     None => {
-                        widgets::hint(ui, &format!("{global_curve:.1} (Settings)"));
+                        widgets::hint(ui, &t!("%{curve} (Settings)", curve = format!("{global_curve:.1}")));
                     }
                 }
             });
@@ -953,9 +972,12 @@ impl App {
             (sh.audio.clone(), sh.store.settings.allow_boost, sh.source_peaks.clone())
         };
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Sources").font(semibold(17.0)));
+            ui.label(RichText::new(t!("Sources")).font(semibold(17.0)));
         });
-        widgets::hint(ui, &format!("{}  Drag a row by its handle onto a strip to assign it.", icon::DOTS_SIX_VERTICAL));
+        widgets::hint(
+            ui,
+            &format!("{}  {}", icon::DOTS_SIX_VERTICAL, t!("Drag a row by its handle onto a strip to assign it.")),
+        );
         ui.add_space(6.0);
         let max = if boost { 1.5 } else { 1.0 };
         let apps = group_streams(&audio.apps);
@@ -963,7 +985,7 @@ impl App {
         let total = apps.len() + inputs.len() + audio.sinks.len() + audio.sources.len();
         if total > 8 || !self.source_filter.is_empty() || self.want_filter {
             let w = ui.available_width();
-            let r = widgets::text_field(ui, &mut self.source_filter, "Filter", Some(icon::MAGNIFYING_GLASS), w);
+            let r = widgets::text_field(ui, &mut self.source_filter, &t!("Filter"), Some(icon::MAGNIFYING_GLASS), w);
             if std::mem::take(&mut self.want_filter) {
                 r.request_focus();
             }
@@ -974,9 +996,9 @@ impl App {
             filter.is_empty() || name.to_lowercase().contains(&filter) || sub.to_lowercase().contains(&filter)
         };
         egui::ScrollArea::vertical().id_salt("sources").auto_shrink([false, false]).show(ui, |ui| {
-            widgets::collapsible_card(ui, icon::MUSIC_NOTES, "Applications", apps.len(), |ui| {
+            widgets::collapsible_card(ui, icon::MUSIC_NOTES, &t!("Applications"), apps.len(), |ui| {
                 if apps.is_empty() {
-                    widgets::hint(ui, "Nothing is playing.");
+                    widgets::hint(ui, &t!("Nothing is playing."));
                 }
                 for g in &apps {
                     let a = g[0];
@@ -1012,7 +1034,7 @@ impl App {
             });
             ui.add_space(8.0);
             if !inputs.is_empty() {
-                widgets::collapsible_card(ui, icon::MICROPHONE, "Recording", inputs.len(), |ui| {
+                widgets::collapsible_card(ui, icon::MICROPHONE, &t!("Recording"), inputs.len(), |ui| {
                     for g in &inputs {
                         let a = g[0];
                         let name = a.display_name();
@@ -1051,10 +1073,10 @@ impl App {
                 audio.sinks.iter().filter(|d| !routing::is_bus(&d.name)).collect();
             let inputs: Vec<&crate::audio::Device> = audio.sources.iter().collect();
             for (kind, title, ic, devices, default) in [
-                (Kind::Sink, "Outputs", icon::SPEAKER_HIGH, &outputs, &audio.default_sink),
-                (Kind::Source, "Inputs", icon::MICROPHONE_STAGE, &inputs, &audio.default_source),
+                (Kind::Sink, t!("Outputs"), icon::SPEAKER_HIGH, &outputs, &audio.default_sink),
+                (Kind::Source, t!("Inputs"), icon::MICROPHONE_STAGE, &inputs, &audio.default_source),
             ] {
-                widgets::collapsible_card(ui, ic, title, devices.len(), |ui| {
+                widgets::collapsible_card(ui, ic, &title, devices.len(), |ui| {
                     for d in devices.iter().copied() {
                         if !shown(&d.label, &d.detail) {
                             continue;
@@ -1106,12 +1128,13 @@ impl App {
         max: f32,
     ) {
         let buses = self.shared.lock().unwrap().store.settings.buses.clone();
-        widgets::collapsible_card(ui, icon::FADERS, "Buses", buses.len(), |ui| {
+        widgets::collapsible_card(ui, icon::FADERS, &t!("Buses"), buses.len(), |ui| {
             if buses.is_empty() {
                 widgets::hint(
                     ui,
-                    "A bus mixes several apps into one fader, like Game, Chat and Music mixes. \
-                     Put apps on it with their Play on… menu.",
+                    &t!(
+                        "A bus mixes several apps into one fader, like Game, Chat and Music mixes. Put apps on it with their Play on… menu."
+                    ),
                 );
             }
             let outputs: Vec<&crate::audio::Device> =
@@ -1128,14 +1151,14 @@ impl App {
                             .output
                             .as_ref()
                             .and_then(|o| outputs.iter().find(|d| d.name == *o))
-                            .map_or("Default output".to_string(), |d| d.label.clone());
+                            .map_or(t!("Default output").to_string(), |d| d.label.clone());
                         ui.vertical(|ui| {
                             self.source_row(
                                 ui,
                                 Kind::Sink,
                                 &[d.index],
                                 &bus.name,
-                                Some(format!("plays on {plays_on}")),
+                                Some(t!("plays on %{output}", output = plays_on).to_string()),
                                 &["audio-card".into(), "audio-speakers".into()],
                                 d.volume,
                                 d.mute,
@@ -1150,7 +1173,7 @@ impl App {
                     None => {
                         ui.label(RichText::new(icon::HOURGLASS).color(pal().text_dim));
                         ui.label(&bus.name);
-                        widgets::hint(ui, "starting…");
+                        widgets::hint(ui, &t!("starting…"));
                     }
                 });
                 ui.horizontal(|ui| {
@@ -1159,12 +1182,12 @@ impl App {
                     let text = outputs
                         .iter()
                         .find(|d| d.name == current)
-                        .map_or("Default output".to_string(), |d| d.label.clone());
+                        .map_or(t!("Default output").to_string(), |d| d.label.clone());
                     widgets::combo(("bus-out", i))
                         .selected_text(format!("{}  {text}", icon::SPEAKER_HIGH))
                         .width(170.0)
                         .show_ui(ui, |ui| {
-                            if ui.selectable_label(bus.output.is_none(), "Default output").clicked() {
+                            if ui.selectable_label(bus.output.is_none(), t!("Default output")).clicked() {
                                 set_output = Some((i, None));
                             }
                             for d in &outputs {
@@ -1175,8 +1198,8 @@ impl App {
                             }
                         })
                         .response
-                        .on_hover_text("Where this bus plays");
-                    if widgets::icon_only(ui, icon::TRASH, "Remove bus").clicked() {
+                        .on_hover_text(t!("Where this bus plays"));
+                    if widgets::icon_only(ui, icon::TRASH, &t!("Remove bus")).clicked() {
                         remove = Some(i);
                     }
                 });
@@ -1185,14 +1208,16 @@ impl App {
             ui.horizontal(|ui| {
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut self.new_bus)
-                        .hint_text("New bus, e.g. Game")
+                        .hint_text(t!("New bus, e.g. Game"))
                         .desired_width(ui.available_width() - 70.0),
                 );
                 let name = self.new_bus.trim().to_string();
                 let new = Bus { name: name.clone(), output: None };
                 let ok = !name.is_empty() && !buses.iter().any(|b| b.sink_name() == new.sink_name());
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (ui.add_enabled(ok, egui::Button::new(format!("{}  Add", icon::PLUS))).clicked() || enter) && ok {
+                if (ui.add_enabled(ok, egui::Button::new(format!("{}  {}", icon::PLUS, t!("Add")))).clicked() || enter)
+                    && ok
+                {
                     self.edit_settings(|s| s.buses.push(new));
                     self.new_bus.clear();
                 }
@@ -1207,7 +1232,7 @@ impl App {
                 });
                 self.toast(
                     icon::TRASH,
-                    format!("Removed bus {name}; its apps moved to the default output"),
+                    t!("Removed bus %{name}; its apps moved to the default output", name = name),
                     None,
                     None,
                 );
@@ -1286,7 +1311,7 @@ impl App {
                 };
                 if ui
                     .add(egui::Button::new(star).frame(false))
-                    .on_hover_text(if *is_default { "Default device" } else { "Make default" })
+                    .on_hover_text(if *is_default { t!("Default device") } else { t!("Make default") })
                     .clicked()
                     && !is_default
                 {
@@ -1298,17 +1323,21 @@ impl App {
             } else {
                 RichText::new(icon::SPEAKER_HIGH).color(pal().text_dim)
             };
-            if ui.add(egui::Button::new(m).frame(false)).on_hover_text(if mute { "Unmute" } else { "Mute" }).clicked() {
+            if ui
+                .add(egui::Button::new(m).frame(false))
+                .on_hover_text(if mute { t!("Unmute") } else { t!("Mute") })
+                .clicked()
+            {
                 for &i in indices {
                     self.send(UiCmd::SetStreamMute(kind, i, !mute));
                 }
             }
             // Which device an app plays on (or records from).
             if let Some((current, devices)) = route {
-                let hover = if kind == Kind::SinkInput { "Play on…" } else { "Record from…" };
-                let button = widgets::icon_only(ui, icon::CARET_DOWN, hover);
+                let hover = if kind == Kind::SinkInput { t!("Play on…") } else { t!("Record from…") };
+                let button = widgets::icon_only(ui, icon::CARET_DOWN, &hover);
                 egui::Popup::menu(&button).show(|ui| {
-                    ui.label(RichText::new(hover).font(semibold(13.0)));
+                    ui.label(RichText::new(hover.as_ref()).font(semibold(13.0)));
                     let app = match &target {
                         Target::App { m, .. } | Target::AppInput { m, .. } => Some(m.clone()),
                         _ => None,
@@ -1339,8 +1368,9 @@ impl App {
                     if let Some(m) = app {
                         ui.separator();
                         let mut always = route.is_some();
-                        let label = if input { "Always record from here" } else { "Always play here" };
-                        if ui.checkbox(&mut always, label).on_hover_text("Also when the app starts again").changed() {
+                        let label = if input { t!("Always record from here") } else { t!("Always play here") };
+                        if ui.checkbox(&mut always, label).on_hover_text(t!("Also when the app starts again")).changed()
+                        {
                             match route {
                                 Some(r) => self.edit_settings(|s| {
                                     s.routes.remove(r);
@@ -1434,7 +1464,7 @@ fn group_streams(streams: &[crate::audio::AppStream]) -> Vec<Vec<&crate::audio::
 fn stream_sub(group: &[&crate::audio::AppStream]) -> Option<String> {
     let a = group[0];
     if group.len() > 1 {
-        return Some(format!("{} streams", group.len()));
+        return Some(t!("%{count} streams", count = group.len()).to_string());
     }
     (!a.media_name.is_empty() && a.media_name != a.display_name()).then(|| a.media_name.clone())
 }
@@ -1483,14 +1513,17 @@ fn readout(ui: &mut egui::Ui, s: &StripView, size: f32) {
             ui.label(
                 RichText::new(format!("{arrow}{:>3.0}%", s.position * 100.0)).font(mono(size)).color(pal().warn_text),
             )
-            .on_hover_text(format!(
-                "Your controller is at {:.0}%. Move it {} to the volume to take over.",
-                hw * 100.0,
-                if hw < s.position { "up" } else { "down" }
-            ));
+            .on_hover_text({
+                let percent = format!("{:.0}", hw * 100.0);
+                if hw < s.position {
+                    t!("Your controller is at %{percent}%. Move it up to the volume to take over.", percent = percent)
+                } else {
+                    t!("Your controller is at %{percent}%. Move it down to the volume to take over.", percent = percent)
+                }
+            });
         }
         _ => {
-            let text = if s.muted { "MUTE".to_string() } else { format!("{:>3.0}%", s.position * 100.0) };
+            let text = if s.muted { t!("MUTE").to_string() } else { format!("{:>3.0}%", s.position * 100.0) };
             ui.label(RichText::new(text).font(mono(size)).color(if s.muted { pal().mute_text } else { pal().readout }));
         }
     }

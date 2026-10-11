@@ -1,6 +1,7 @@
 //! Buttons, Profiles, Settings and Log pages.
 
 use eframe::egui::{self, RichText, Stroke, vec2};
+use rust_i18n::t;
 
 use super::controller::port_combo;
 use super::mixer::target_glyph;
@@ -27,8 +28,8 @@ impl App {
         let before = p.buttons.clone();
         widgets::page_header(
             ui,
-            "Buttons",
-            Some("Buttons that aren't part of a channel strip can run these actions."),
+            &t!("Buttons"),
+            Some(&t!("Buttons that aren't part of a channel strip can run these actions.")),
             |_| {},
         );
         let spare = p.spare_buttons();
@@ -36,8 +37,10 @@ impl App {
         let mut learn: Option<String> = None;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             if spare.is_empty() {
-                widgets::card(ui, icon::INFO, "No spare buttons", |ui| {
-                    ui.label("Every button belongs to a group. Add a button control under Controller to use it here.");
+                widgets::card(ui, icon::INFO, &t!("No spare buttons"), |ui| {
+                    ui.label(t!(
+                        "Every button belongs to a group. Add a button control under Controller to use it here."
+                    ));
                 });
             }
             // Grouped like the hardware, cards in equal-width columns.
@@ -56,7 +59,13 @@ impl App {
             sections.sort_by_key(|(s, _)| ["Transport", "Track", "Marker", "Other"].iter().position(|x| x == s));
             for (section, ids) in sections {
                 if section != "Other" || spare.len() > ids.len() {
-                    ui.label(RichText::new(section.to_uppercase()).size(11.5).color(pal().text_dim).strong());
+                    let heading = match section {
+                        "Transport" => t!("Transport"),
+                        "Track" => t!("Track"),
+                        "Marker" => t!("Marker"),
+                        _ => t!("Other"),
+                    };
+                    ui.label(RichText::new(heading.to_uppercase()).size(11.5).color(pal().text_dim).strong());
                     ui.add_space(2.0);
                 }
                 egui::Grid::new(("button-cards", section)).num_columns(cols).spacing([12.0, 12.0]).show(ui, |ui| {
@@ -74,13 +83,13 @@ impl App {
                                 if widgets::icon_only(
                                     ui,
                                     icon::CROSSHAIR,
-                                    "Learn: press the button on your controller to set which one this is",
+                                    &t!("Learn: press the button on your controller to set which one this is"),
                                 )
                                 .clicked()
                                 {
                                     learn = Some(cid.clone());
                                 }
-                                if widgets::icon_only(ui, icon::PLAY, "Try it").clicked() {
+                                if widgets::icon_only(ui, icon::PLAY, &t!("Try it")).clicked() {
                                     press = Some(cid.clone());
                                 }
                             };
@@ -152,7 +161,7 @@ impl App {
         }
         let r = ui
             .add(egui::Label::new(RichText::new(name).font(semibold(15.0))).sense(egui::Sense::click()))
-            .on_hover_text("Double-click to rename");
+            .on_hover_text(t!("Double-click to rename"));
         if r.double_clicked() {
             self.profile_rename = Some((id.to_string(), name.to_string()));
         }
@@ -170,10 +179,10 @@ impl App {
             apps.dedup();
             (p.auto.clone(), p.bank_count(), p.scenes.keys().cloned().collect::<Vec<_>>(), apps)
         };
-        widgets::card(ui, icon::APP_WINDOW, "When an app has focus", |ui| {
+        widgets::card(ui, icon::APP_WINDOW, &t!("When an app has focus"), |ui| {
             widgets::hint(
                 ui,
-                "Switch to a bank or recall a scene while an app is in front, and back when you leave it.",
+                &t!("Switch to a bank or recall a scene while an app is in front, and back when you leave it."),
             );
             let mut remove = None;
             let mut change = None;
@@ -183,28 +192,28 @@ impl App {
                     let layout = egui::Layout::left_to_right(egui::Align::Center);
                     ui.allocate_ui_with_layout(vec2(150.0, 22.0), layout, |ui| {
                         ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
-                            .on_hover_text(format!("Matches \"{}\"", r.app.pattern));
+                            .on_hover_text(t!("Matches \"%{pattern}\"", pattern = r.app.pattern));
                     });
                     ui.label(RichText::new(icon::ARROW_RIGHT).color(pal().text_dim));
                     let text = match &r.action {
-                        AutoAction::Bank { bank } => format!("Bank {}", bank + 1),
-                        AutoAction::Scene { name } => format!("Scene \"{name}\""),
+                        AutoAction::Bank { bank } => t!("Bank %{bank}", bank = bank + 1),
+                        AutoAction::Scene { name } => t!("Scene \"%{name}\"", name = name),
                     };
                     widgets::combo(("auto", i)).selected_text(text).width(170.0).show_ui(ui, |ui| {
                         for b in 0..banks {
                             let a = AutoAction::Bank { bank: b };
-                            if ui.selectable_label(r.action == a, format!("Bank {}", b + 1)).clicked() {
+                            if ui.selectable_label(r.action == a, t!("Bank %{bank}", bank = b + 1)).clicked() {
                                 change = Some((i, a));
                             }
                         }
                         for sc in &scenes {
                             let a = AutoAction::Scene { name: sc.clone() };
-                            if ui.selectable_label(r.action == a, format!("Scene \"{sc}\"")).clicked() {
+                            if ui.selectable_label(r.action == a, t!("Scene \"%{name}\"", name = sc)).clicked() {
                                 change = Some((i, a));
                             }
                         }
                     });
-                    if widgets::icon_only(ui, icon::TRASH, "Remove rule").clicked() {
+                    if widgets::icon_only(ui, icon::TRASH, &t!("Remove rule")).clicked() {
                         remove = Some(i);
                     }
                 });
@@ -216,14 +225,14 @@ impl App {
             };
             match default {
                 None => {
-                    widgets::hint(ui, "Add a bank or save a scene first (on the Mixer page).");
+                    widgets::hint(ui, &t!("Add a bank or save a scene first (on the Mixer page)."));
                 }
                 Some(default) => {
-                    let r = ui.button(format!("{}  Add rule", icon::PLUS));
+                    let r = ui.button(format!("{}  {}", icon::PLUS, t!("Add rule")));
                     egui::Popup::menu(&r).show(|ui| {
-                        ui.label(RichText::new("Apps playing now").font(semibold(13.0)));
+                        ui.label(RichText::new(t!("Apps playing now")).font(semibold(13.0)));
                         if apps.is_empty() {
-                            widgets::hint(ui, "None. Start the app, then add the rule.");
+                            widgets::hint(ui, &t!("None. Start the app, then add the rule."));
                         }
                         for (label, pattern) in &apps {
                             if ui.button(label).clicked() {
@@ -262,8 +271,8 @@ impl App {
         let mut action: Option<(&str, String)> = None;
         widgets::page_header(
             ui,
-            "Profiles",
-            Some("One profile per controller. The matching one is picked when a device is plugged in."),
+            &t!("Profiles"),
+            Some(&t!("One profile per controller. The matching one is picked when a device is plugged in.")),
             |_| {},
         );
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -288,22 +297,31 @@ impl App {
                                 ui.horizontal(|ui| {
                                     self.profile_name(ui, id, &p.name);
                                     if is_active {
-                                        widgets::pill(ui, Some(pal().accent), "In use");
+                                        widgets::pill(ui, Some(pal().accent), &t!("In use"));
                                     }
                                 });
-                                let (led, status) =
-                                    if connected { (RUN, "connected") } else { (pal().text_faint, "not connected") };
+                                let (led, status) = if connected {
+                                    (RUN, t!("connected"))
+                                } else {
+                                    (pal().text_faint, t!("not connected"))
+                                };
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 6.0;
                                     let (r, _) = ui.allocate_exact_size(egui::Vec2::splat(10.0), egui::Sense::hover());
                                     ui.painter().circle_filled(r.center(), 4.0, led);
+                                    let port = if p.input.is_empty() {
+                                        t!("no port set").to_string()
+                                    } else {
+                                        p.input.clone()
+                                    };
                                     widgets::hint(
                                         ui,
-                                        &format!(
-                                            "{} · {status} · {} controls · {} strips",
-                                            if p.input.is_empty() { "no port set" } else { &p.input },
-                                            p.controls.len(),
-                                            p.groups.len()
+                                        &t!(
+                                            "%{port} · %{status} · %{controls} controls · %{strips} strips",
+                                            port = port,
+                                            status = status,
+                                            controls = p.controls.len(),
+                                            strips = p.groups.len()
                                         ),
                                     );
                                 });
@@ -312,7 +330,7 @@ impl App {
                                         && ui
                                             .add(
                                                 egui::Button::new(
-                                                    RichText::new(format!("{}  Use", icon::CHECK)).strong(),
+                                                    RichText::new(format!("{}  {}", icon::CHECK, t!("Use"))).strong(),
                                                 )
                                                 .fill(pal().accent_bg),
                                             )
@@ -320,16 +338,16 @@ impl App {
                                     {
                                         action = Some(("activate", id.clone()));
                                     }
-                                    if widgets::icon_button(ui, icon::COPY, "Duplicate").clicked() {
+                                    if widgets::icon_button(ui, icon::COPY, &t!("Duplicate")).clicked() {
                                         action = Some(("duplicate", id.clone()));
                                     }
-                                    if widgets::icon_button(ui, icon::EXPORT, "Export")
-                                        .on_hover_text("Save it as a file (the MIDI Mixer spec.json format)")
+                                    if widgets::icon_button(ui, icon::EXPORT, &t!("Export"))
+                                        .on_hover_text(t!("Save it as a file (the MIDI Mixer spec.json format)"))
                                         .clicked()
                                     {
                                         action = Some(("export", id.clone()));
                                     }
-                                    if widgets::icon_button(ui, icon::TRASH, "Delete").clicked() {
+                                    if widgets::icon_button(ui, icon::TRASH, &t!("Delete")).clicked() {
                                         action = Some(("delete", id.clone()));
                                     }
                                 });
@@ -340,26 +358,26 @@ impl App {
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if widgets::icon_button(ui, icon::PLUS, "New empty profile").clicked() {
+                if widgets::icon_button(ui, icon::PLUS, &t!("New empty profile")).clicked() {
                     action = Some(("new", String::new()));
                 }
-                if widgets::icon_button(ui, icon::PLUS, "Korg nanoKONTROL2 default").clicked() {
+                if widgets::icon_button(ui, icon::PLUS, &t!("Korg nanoKONTROL2 default")).clicked() {
                     action = Some(("nano", String::new()));
                 }
             });
             ui.add_space(12.0);
-            widgets::card(ui, icon::DOWNLOAD_SIMPLE, "Import", |ui| {
-                widgets::hint(ui, "Profiles from MIDI Mixer for Windows (spec.json) and from this app.");
+            widgets::card(ui, icon::DOWNLOAD_SIMPLE, &t!("Import"), |ui| {
+                widgets::hint(ui, &t!("Profiles from MIDI Mixer for Windows (spec.json) and from this app."));
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.import_path)
                             .desired_width(420.0)
                             .hint_text("/path/to/spec.json"),
                     );
-                    if widgets::icon_button(ui, icon::FOLDER_OPEN, "Browse…").clicked() {
+                    if widgets::icon_button(ui, icon::FOLDER_OPEN, &t!("Browse…")).clicked() {
                         self.pick_file(PickPurpose::Import);
                     }
-                    if widgets::icon_button(ui, icon::DOWNLOAD_SIMPLE, "Import").clicked() {
+                    if widgets::icon_button(ui, icon::DOWNLOAD_SIMPLE, &t!("Import")).clicked() {
                         action = Some(("import", self.import_path.trim().to_string()));
                     }
                 });
@@ -377,7 +395,7 @@ impl App {
             }
             "duplicate" => {
                 if let Some(mut p) = sh.store.profiles.get(&arg).cloned() {
-                    p.name = format!("{} (copy)", p.name);
+                    p.name = t!("%{name} (copy)", name = p.name).to_string();
                     let id = crate::profile::new_id();
                     let name = p.name.clone();
                     sh.store.profiles.insert(id.clone(), p);
@@ -385,7 +403,7 @@ impl App {
                     drop(sh);
                     // Straight into renaming the copy.
                     self.profile_rename = Some((id, name));
-                    self.flash("Duplicated; give the copy a name");
+                    self.flash(t!("Duplicated; give the copy a name"));
                 }
             }
             "export" => {
@@ -396,11 +414,12 @@ impl App {
                 let name = sh.store.profiles.get(&arg).map(|p| p.name.clone()).unwrap_or_default();
                 drop(sh);
                 self.confirm = Some(super::Confirm {
-                    title: format!("Delete \"{name}\"?"),
-                    body:
+                    title: t!("Delete \"%{name}\"?", name = name).to_string(),
+                    body: t!(
                         "Its controls, assignments, banks and scenes are deleted too. Export it first to keep a copy."
-                            .into(),
-                    button: "Delete profile".into(),
+                    )
+                    .into(),
+                    button: t!("Delete profile").into(),
                     action: super::ConfirmAction::DeleteProfile(arg),
                     alt: None,
                 });
@@ -409,7 +428,7 @@ impl App {
                 let p = if what == "nano" {
                     Profile::nanokontrol2()
                 } else {
-                    Profile { name: "New profile".into(), ..Default::default() }
+                    Profile { name: t!("New profile").into(), ..Default::default() }
                 };
                 let id = crate::profile::new_id();
                 sh.store.profiles.insert(id.clone(), p);
@@ -428,15 +447,16 @@ impl App {
                     self.import_profile(&arg, false);
                 } else {
                     self.confirm = Some(super::Confirm {
-                        title: "This profile runs commands".into(),
+                        title: t!("This profile runs commands").into(),
                         body: format!(
-                            "{}\n\nOnly keep these if you trust where the profile came from.",
-                            risky.join("\n")
+                            "{}\n\n{}",
+                            risky.join("\n"),
+                            t!("Only keep these if you trust where the profile came from.")
                         ),
-                        button: "Keep them".into(),
+                        button: t!("Keep them").into(),
                         action: super::ConfirmAction::Import { path: arg.clone(), trusted: true },
                         alt: Some((
-                            "Import without them".into(),
+                            t!("Import without them").into(),
                             super::ConfirmAction::Import { path: arg, trusted: false },
                         )),
                     });
@@ -452,7 +472,7 @@ impl App {
             (sh.store.settings.clone(), sh.ports_out.clone())
         };
         let before = s.clone();
-        widgets::page_header(ui, "Settings", None, |_| {});
+        widgets::page_header(ui, &t!("Settings"), None, |_| {});
         let wide = ui.available_width() > 1000.0;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             if wide {
@@ -494,29 +514,34 @@ impl App {
     }
 
     fn general_card(&mut self, ui: &mut egui::Ui, s: &mut Settings) {
-        widgets::card(ui, icon::GEAR_SIX, "General", |ui| {
+        widgets::card(ui, icon::GEAR_SIX, &t!("General"), |ui| {
             let mut autostart = config::autostart_enabled();
-            if widgets::toggle(ui, &mut autostart, "Start when I log in").changed() {
+            if widgets::toggle(ui, &mut autostart, &t!("Start when I log in")).changed() {
                 let events = self.events.clone();
                 config::set_autostart_in_background(autostart, move |e| {
-                    let _ = events.send(Event::Notice(Notice::Problem(format!("Autostart: {e}"))));
+                    let _ =
+                        events.send(Event::Notice(Notice::Problem(t!("Autostart: %{error}", error = e).to_string())));
                 });
             }
-            widgets::toggle(ui, &mut s.start_minimized, "Start minimised to the tray");
-            widgets::toggle(ui, &mut s.close_quits, "Closing the window quits (instead of hiding to the tray)");
-            widgets::toggle(ui, &mut s.auto_switch, "Switch to the matching profile when a controller is plugged in");
-            widgets::toggle(ui, &mut s.osd, "Show a volume pop-up when a fader moves");
+            widgets::toggle(ui, &mut s.start_minimized, &t!("Start minimised to the tray"));
+            widgets::toggle(ui, &mut s.close_quits, &t!("Closing the window quits (instead of hiding to the tray)"));
+            widgets::toggle(
+                ui,
+                &mut s.auto_switch,
+                &t!("Switch to the matching profile when a controller is plugged in"),
+            );
+            widgets::toggle(ui, &mut s.osd, &t!("Show a volume pop-up when a fader moves"));
         });
     }
 
     /// LED mode setup as steps, and a test that lights every LED in turn.
     fn nano_card(&mut self, ui: &mut egui::Ui) {
-        widgets::card(ui, icon::LIGHTBULB, "nanoKONTROL2 LEDs", |ui| {
-            widgets::hint(ui, "The computer can only light the buttons in \"External\" LED mode. Set it once:");
+        widgets::card(ui, icon::LIGHTBULB, &t!("nanoKONTROL2 LEDs"), |ui| {
+            widgets::hint(ui, &t!("The computer can only light the buttons in \"External\" LED mode. Set it once:"));
             for (i, step) in [
-                "Open the Korg KONTROL Editor (it runs under Wine).",
-                "Under Common, set LED Mode to External.",
-                "Write the scene to the device.",
+                t!("Open the Korg KONTROL Editor (it runs under Wine)."),
+                t!("Under Common, set LED Mode to External."),
+                t!("Write the scene to the device."),
             ]
             .iter()
             .enumerate()
@@ -531,13 +556,13 @@ impl App {
                         semibold(11.5),
                         pal().text_strong,
                     );
-                    ui.label(*step);
+                    ui.label(step.clone());
                 });
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let running = self.led_test.is_some();
-                let text = if running { "Testing…" } else { "Test LEDs" };
+                let text = if running { t!("Testing…") } else { t!("Test LEDs") };
                 if ui.add_enabled(!running, egui::Button::new(format!("{}  {text}", icon::LIGHTBULB))).clicked() {
                     let ids: Vec<String> = {
                         let sh = self.shared.lock().unwrap();
@@ -553,7 +578,7 @@ impl App {
                     };
                     self.led_test = Some((std::time::Instant::now(), ids, 0));
                 }
-                widgets::hint(ui, "Every button should light up once. If none do, LED Mode is still Internal.");
+                widgets::hint(ui, &t!("Every button should light up once. If none do, LED Mode is still Internal."));
             });
         });
         // Light the next LED every 120 ms.
@@ -572,7 +597,7 @@ impl App {
     }
 
     fn about_card(&mut self, ui: &mut egui::Ui) {
-        widgets::card(ui, icon::INFO, "About", |ui| {
+        widgets::card(ui, icon::INFO, &t!("About"), |ui| {
             ui.horizontal(|ui| {
                 if let Some(logo) = &self.logo {
                     ui.add(egui::Image::new(logo).fit_to_exact_size(vec2(40.0, 40.0)));
@@ -580,36 +605,37 @@ impl App {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     ui.label(RichText::new(format!("Slidewire {}", env!("CARGO_PKG_VERSION"))).font(semibold(15.0)));
-                    widgets::hint(ui, "Free software under the GPL 3.0 or later.");
+                    widgets::hint(ui, &t!("Free software under the GPL 3.0 or later."));
                 });
             });
             ui.add_space(SP_S);
             ui.horizontal_wrapped(|ui| {
-                ui.hyperlink_to(format!("{}  Source code", icon::CODE), REPO);
-                ui.hyperlink_to(format!("{}  Report a problem", icon::BUG), format!("{REPO}/issues"));
+                ui.hyperlink_to(format!("{}  {}", icon::CODE, t!("Source code")), REPO);
+                ui.hyperlink_to(format!("{}  {}", icon::BUG, t!("Report a problem")), format!("{REPO}/issues"));
             });
             ui.add_space(SP_S);
             ui.horizontal_wrapped(|ui| {
                 let dir = self.shared.lock().unwrap().store.dir.clone();
                 if ui
-                    .button(format!("{}  Open settings folder", icon::FOLDER_OPEN))
+                    .button(format!("{}  {}", icon::FOLDER_OPEN, t!("Open settings folder")))
                     .on_hover_text(dir.display().to_string())
                     .clicked()
                     && let Err(e) = crate::actions::spawn_detached(std::process::Command::new("xdg-open").arg(&dir))
                 {
-                    self.problem(format!("Couldn't open the folder: {e}"));
+                    self.problem(t!("Couldn't open the folder: %{error}", error = e));
                 }
-                if ui.button(format!("{}  Show the welcome again", icon::HAND_WAVING)).clicked() {
+                if ui.button(format!("{}  {}", icon::HAND_WAVING, t!("Show the welcome again"))).clicked() {
                     self.welcome = Some(super::welcome::Welcome::new());
                     self.welcome_other = None;
                 }
             });
             ui.add_space(SP_S);
-            ui.collapsing("Third-party notices", |ui| {
+            ui.collapsing(t!("Third-party notices"), |ui| {
                 widgets::hint(
                     ui,
-                    "Inter and JetBrains Mono fonts: SIL Open Font License 1.1. Phosphor icons: MIT License. \
-                     Rust crates: see each crate's licence.",
+                    &t!(
+                        "Inter and JetBrains Mono fonts: SIL Open Font License 1.1. Phosphor icons: MIT License. Rust crates: see each crate's licence."
+                    ),
                 );
             });
         });
@@ -618,20 +644,20 @@ impl App {
     pub(super) fn log(&mut self, ui: &mut egui::Ui) {
         let lines: Vec<crate::engine::LogEntry> = self.shared.lock().unwrap().log.iter().cloned().collect();
         let mut copied = false;
-        widgets::page_header(ui, "Log", Some("What happened, newest at the bottom."), |ui| {
-            if widgets::icon_button(ui, icon::TRASH, "Clear").clicked() {
+        widgets::page_header(ui, &t!("Log"), Some("What happened, newest at the bottom."), |ui| {
+            if widgets::icon_button(ui, icon::TRASH, &t!("Clear")).clicked() {
                 self.shared.lock().unwrap().log.clear();
             }
-            if widgets::icon_button(ui, icon::COPY, "Copy").clicked() {
+            if widgets::icon_button(ui, icon::COPY, &t!("Copy")).clicked() {
                 let text: String = lines.iter().map(|l| format!("{}  {}\n", l.time, l.text)).collect();
                 ui.ctx().copy_text(text);
                 copied = true;
             }
-            ui.checkbox(&mut self.log_warnings_only, "Problems only");
-            widgets::text_field(ui, &mut self.log_filter, "Filter", Some(icon::MAGNIFYING_GLASS), 220.0);
+            ui.checkbox(&mut self.log_warnings_only, t!("Problems only"));
+            widgets::text_field(ui, &mut self.log_filter, &t!("Filter"), Some(icon::MAGNIFYING_GLASS), 220.0);
         });
         if copied {
-            self.flash("Log copied");
+            self.flash(t!("Log copied"));
         }
         let filter = self.log_filter.to_lowercase();
         let shown: Vec<&crate::engine::LogEntry> = lines
@@ -658,7 +684,7 @@ impl App {
                 egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     if shown.is_empty() {
-                        let msg = if lines.is_empty() { "Nothing logged yet." } else { "Nothing matches." };
+                        let msg = if lines.is_empty() { t!("Nothing logged yet.") } else { t!("Nothing matches.") };
                         ui.label(RichText::new(msg).font(mono(12.5)).color(time));
                     }
                     for (i, l) in shown.iter().enumerate() {
@@ -675,7 +701,7 @@ impl App {
                                 ui.horizontal_wrapped(|ui| {
                                     ui.label(RichText::new(&l.time).font(mono(12.0)).color(time));
                                     if l.warn {
-                                        widgets::chip(ui, "WARN", warn);
+                                        widgets::chip(ui, &t!("WARN"), warn);
                                     }
                                     ui.label(RichText::new(&l.text).font(mono(12.5)).color(if l.warn {
                                         warn
@@ -810,22 +836,22 @@ fn action_editor(
         ButtonAction::Media { key, player } => {
             ui.horizontal(|ui| {
                 for (k, l) in [
-                    (MediaKey::PlayPause, format!("{}  Play/Pause", icon::PLAY_PAUSE)),
-                    (MediaKey::Stop, format!("{}  Stop", icon::STOP)),
-                    (MediaKey::Previous, format!("{}  Previous", icon::SKIP_BACK)),
-                    (MediaKey::Next, format!("{}  Next", icon::SKIP_FORWARD)),
+                    (MediaKey::PlayPause, format!("{}  {}", icon::PLAY_PAUSE, t!("Play/Pause"))),
+                    (MediaKey::Stop, format!("{}  {}", icon::STOP, t!("Stop"))),
+                    (MediaKey::Previous, format!("{}  {}", icon::SKIP_BACK, t!("Previous"))),
+                    (MediaKey::Next, format!("{}  {}", icon::SKIP_FORWARD, t!("Next"))),
                 ] {
                     ui.selectable_value(key, k, l);
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("Player");
-                ui.add(egui::TextEdit::singleline(player).hint_text("whichever is playing").desired_width(160.0));
-                let r = widgets::icon_framed(ui, icon::CARET_DOWN, "Running players");
+                ui.label(t!("Player"));
+                ui.add(egui::TextEdit::singleline(player).hint_text(t!("whichever is playing")).desired_width(160.0));
+                let r = widgets::icon_framed(ui, icon::CARET_DOWN, &t!("Running players"));
                 egui::Popup::menu(&r).show(|ui| {
                     let players = crate::dbus::mpris_players();
                     if players.is_empty() {
-                        widgets::hint(ui, "No media players running.");
+                        widgets::hint(ui, &t!("No media players running."));
                     }
                     for p in players {
                         if ui.button(&p).clicked() {
@@ -870,25 +896,26 @@ fn action_editor(
             });
         }
         ButtonAction::DefaultOutput { names } => {
-            widgets::hint(ui, "Pick one device, or several to cycle through them:");
+            widgets::hint(ui, &t!("Pick one device, or several to cycle through them:"));
             device_checklist(ui, names, &audio.sinks);
         }
         ButtonAction::DefaultInput { names } => {
-            widgets::hint(ui, "Pick one device, or several to cycle through them:");
+            widgets::hint(ui, &t!("Pick one device, or several to cycle through them:"));
             device_checklist(ui, names, &audio.sources);
         }
         ButtonAction::Command { command } => {
-            ui.add(egui::TextEdit::singleline(command).desired_width(320.0).hint_text("e.g. spectacle -r"));
+            ui.add(egui::TextEdit::singleline(command).desired_width(320.0).hint_text(t!("e.g. spectacle -r")));
         }
         ButtonAction::Keys { keys } => {
             ui.add(egui::TextEdit::singleline(keys).desired_width(220.0).hint_text("ctrl+shift+m"));
             if keys_ready() {
-                widgets::hint(ui, &format!("{}  ydotool is ready.", icon::CHECK));
+                widgets::hint(ui, &format!("{}  {}", icon::CHECK, t!("ydotool is ready.")));
             } else {
                 ui.label(
                     RichText::new(format!(
-                        "{}  Needs ydotool with ydotoold running (sudo pacman -S ydotool; systemctl --user enable --now ydotool).",
-                        icon::WARNING
+                        "{}  {}",
+                        icon::WARNING,
+                        t!("Needs ydotool with ydotoold running (sudo pacman -S ydotool; systemctl --user enable --now ydotool).")
                     ))
                     .size(12.5)
                     .color(pal().warn_text),
@@ -897,16 +924,16 @@ fn action_editor(
         }
         ButtonAction::Bank { step } => {
             ui.horizontal(|ui| {
-                ui.selectable_value(step, -1, format!("{}  Previous", icon::CARET_LEFT));
-                ui.selectable_value(step, 1, format!("{}  Next", icon::CARET_RIGHT));
+                ui.selectable_value(step, -1, format!("{}  {}", icon::CARET_LEFT, t!("Previous")));
+                ui.selectable_value(step, 1, format!("{}  {}", icon::CARET_RIGHT, t!("Next")));
             });
-            widgets::hint(ui, "Wraps around. The button's LED is lit on banks 2 and up.");
+            widgets::hint(ui, &t!("Wraps around. The button's LED is lit on banks 2 and up."));
         }
         ButtonAction::Scene { name } => {
             if scenes.is_empty() {
-                widgets::hint(ui, "No scenes yet. Save one with the Scenes menu on the Mixer page.");
+                widgets::hint(ui, &t!("No scenes yet. Save one with the Scenes menu on the Mixer page."));
             } else {
-                let text = if name.is_empty() { "Pick…".to_string() } else { name.clone() };
+                let text = if name.is_empty() { t!("Pick…").to_string() } else { name.clone() };
                 widgets::combo(("scene-action", cid)).selected_text(text).show_ui(ui, |ui| {
                     for s in scenes {
                         ui.selectable_value(name, s.clone(), s);
@@ -915,13 +942,13 @@ fn action_editor(
             }
         }
         ButtonAction::MuteInputs => {
-            widgets::hint(ui, "Mutes or unmutes every microphone. The LED is lit while they're muted.");
+            widgets::hint(ui, &t!("Mutes or unmutes every microphone. The LED is lit while they're muted."));
         }
         ButtonAction::PushToTalk => {
-            widgets::hint(ui, "The default microphone is live only while you hold the button.");
+            widgets::hint(ui, &t!("The default microphone is live only while you hold the button."));
         }
         ButtonAction::PushToMute => {
-            widgets::hint(ui, "The default microphone is muted while you hold the button.");
+            widgets::hint(ui, &t!("The default microphone is muted while you hold the button."));
         }
         ButtonAction::Monitor { source, sink } => {
             let sources: Vec<(String, String)> = audio
@@ -933,7 +960,7 @@ fn action_editor(
                         .sinks
                         .iter()
                         .filter(|d| crate::routing::is_bus(&d.name))
-                        .map(|d| (d.monitor_source.clone(), format!("{} (bus)", d.label))),
+                        .map(|d| (d.monitor_source.clone(), t!("%{bus} (bus)", bus = d.label).to_string())),
                 )
                 .collect();
             let sinks: Vec<(String, String)> = audio
@@ -942,17 +969,20 @@ fn action_editor(
                 .filter(|d| !crate::routing::is_bus(&d.name))
                 .map(|d| (d.name.clone(), d.label.clone()))
                 .collect();
-            device_combo(ui, ("monitor-src", cid), "Hear", source, &sources, "Default input");
-            device_combo(ui, ("monitor-sink", cid), "On", sink, &sinks, "Default output");
-            widgets::hint(ui, "Press to hear it live (wear headphones), press again to stop. The LED shows it's on.");
+            device_combo(ui, ("monitor-src", cid), &t!("Hear"), source, &sources, &t!("Default input"));
+            device_combo(ui, ("monitor-sink", cid), &t!("On"), sink, &sinks, &t!("Default output"));
+            widgets::hint(
+                ui,
+                &t!("Press to hear it live (wear headphones), press again to stop. The LED shows it's on."),
+            );
         }
         ButtonAction::EasyEffects { preset } => {
             let presets = crate::routing::easyeffects_presets();
             if presets.is_empty() {
-                widgets::hint(ui, "No EasyEffects presets found. Save one in EasyEffects first.");
-                ui.add(egui::TextEdit::singleline(preset).hint_text("Preset name").desired_width(220.0));
+                widgets::hint(ui, &t!("No EasyEffects presets found. Save one in EasyEffects first."));
+                ui.add(egui::TextEdit::singleline(preset).hint_text(t!("Preset name")).desired_width(220.0));
             } else {
-                let text = if preset.is_empty() { "Pick…".to_string() } else { preset.clone() };
+                let text = if preset.is_empty() { t!("Pick…").to_string() } else { preset.clone() };
                 widgets::combo(("ee-preset", cid)).selected_text(text).width(220.0).show_ui(ui, |ui| {
                     for (name, input) in presets {
                         let label = format!("{}  {name}", if input { icon::MICROPHONE } else { icon::SPEAKER_HIGH });
@@ -960,16 +990,19 @@ fn action_editor(
                     }
                 });
             }
-            widgets::hint(ui, "Two buttons with two presets (say, with and without noise suppression) make a switch.");
+            widgets::hint(
+                ui,
+                &t!("Two buttons with two presets (say, with and without noise suppression) make a switch."),
+            );
         }
         ButtonAction::Obs { op } => {
             use crate::obs::ObsOp;
             ui.horizontal(|ui| {
                 for (o, l) in [
-                    (ObsOp::Scene { name: String::new() }, "Switch scene"),
-                    (ObsOp::ToggleMute { input: String::new() }, "Mute a source"),
-                    (ObsOp::ToggleRecord, "Record"),
-                    (ObsOp::ToggleStream, "Stream"),
+                    (ObsOp::Scene { name: String::new() }, t!("Switch scene")),
+                    (ObsOp::ToggleMute { input: String::new() }, t!("Mute a source")),
+                    (ObsOp::ToggleRecord, t!("Record")),
+                    (ObsOp::ToggleStream, t!("Stream")),
                 ] {
                     let same = std::mem::discriminant(&o) == std::mem::discriminant(op);
                     if ui.selectable_label(same, l).clicked() && !same {
@@ -982,16 +1015,16 @@ fn action_editor(
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::TextEdit::singleline(name)
-                                .hint_text("Scene name, exactly as in OBS")
+                                .hint_text(t!("Scene name, exactly as in OBS"))
                                 .desired_width(240.0),
                         );
-                        let r = widgets::icon_framed(ui, icon::CARET_DOWN, "Scenes in OBS");
+                        let r = widgets::icon_framed(ui, icon::CARET_DOWN, &t!("Scenes in OBS"));
                         if r.clicked() {
                             fetch_obs_scenes(ui.ctx());
                         }
                         egui::Popup::menu(&r).show(|ui| match &*OBS_SCENES.lock().unwrap() {
                             None => {
-                                widgets::hint(ui, "Asking OBS…");
+                                widgets::hint(ui, &t!("Asking OBS…"));
                             }
                             Some(Err(e)) => {
                                 widgets::hint(ui, e);
@@ -1009,21 +1042,26 @@ fn action_editor(
                 }
                 ObsOp::ToggleMute { input } => {
                     ui.add(
-                        egui::TextEdit::singleline(input).hint_text("Source name, e.g. Mic/Aux").desired_width(240.0),
+                        egui::TextEdit::singleline(input)
+                            .hint_text(t!("Source name, e.g. Mic/Aux"))
+                            .desired_width(240.0),
                     );
                 }
                 ObsOp::ToggleRecord => {
-                    widgets::hint(ui, "Starts recording, or stops it.");
+                    widgets::hint(ui, &t!("Starts recording, or stops it."));
                 }
                 ObsOp::ToggleStream => {
-                    widgets::hint(ui, "Starts streaming, or stops it.");
+                    widgets::hint(ui, &t!("Starts streaming, or stops it."));
                 }
             }
-            widgets::hint(ui, "Set OBS's address and password under Settings.");
+            widgets::hint(ui, &t!("Set OBS's address and password under Settings."));
         }
         ButtonAction::Profile { id } => {
-            let current =
-                profiles.iter().find(|(pid, _)| pid == id).map(|(_, n)| n.clone()).unwrap_or_else(|| "Pick…".into());
+            let current = profiles
+                .iter()
+                .find(|(pid, _)| pid == id)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_else(|| t!("Pick…").into());
             widgets::combo(("profile-action", cid)).selected_text(current).show_ui(ui, |ui| {
                 for (pid, name) in profiles {
                     ui.selectable_value(id, pid.clone(), name);
@@ -1047,7 +1085,7 @@ fn device_checklist(ui: &mut egui::Ui, names: &mut Vec<String>, devices: &[crate
     // Keep devices that are currently unplugged.
     for n in names.clone() {
         if !devices.iter().any(|d| d.name == n) {
-            widgets::hint(ui, &format!("{n} (not connected)"));
+            widgets::hint(ui, &t!("%{device} (not connected)", device = n));
         }
     }
 }
@@ -1056,18 +1094,22 @@ const REPO: &str = "https://git.briggen.dev/NilsBriggen/SlideWire";
 
 fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
     use crate::config::{Accent, ThemeMode};
-    widgets::card(ui, icon::PALETTE, "Appearance", |ui| {
+    widgets::card(ui, icon::PALETTE, &t!("Appearance"), |ui| {
         ui.horizontal(|ui| {
-            ui.label("Theme");
+            ui.label(t!("Theme"));
             ui.add_space(SP_S);
             widgets::segmented(
                 ui,
                 &mut s.theme,
-                &[(ThemeMode::System, "System"), (ThemeMode::Dark, "Dark"), (ThemeMode::Light, "Light")],
+                &[
+                    (ThemeMode::System, &*t!("System")),
+                    (ThemeMode::Dark, &*t!("Dark")),
+                    (ThemeMode::Light, &*t!("Light")),
+                ],
             );
         });
         ui.horizontal(|ui| {
-            ui.label("Accent");
+            ui.label(t!("Accent"));
             ui.add_space(SP_S);
             let system = crate::appearance::system().accent;
             for a in Accent::ALL {
@@ -1081,7 +1123,7 @@ fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
             }
         });
         ui.horizontal(|ui| {
-            ui.label("Size");
+            ui.label(t!("Size"));
             ui.add_space(SP_S);
             // Applied when the slider is let go: zooming while dragging
             // would move the slider under the mouse.
@@ -1101,8 +1143,8 @@ fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
                 }
             }
         });
-        widgets::hint(ui, "Ctrl + and Ctrl − change it too; Ctrl 0 resets.");
-        widgets::toggle(ui, &mut s.reduce_motion, "Reduce motion");
+        widgets::hint(ui, &t!("Ctrl + and Ctrl − change it too; Ctrl 0 resets."));
+        widgets::toggle(ui, &mut s.reduce_motion, &t!("Reduce motion"));
     });
 }
 
@@ -1133,27 +1175,27 @@ fn curve_preview(ui: &mut egui::Ui, exponent: f32) {
 }
 
 fn volume_card(ui: &mut egui::Ui, s: &mut Settings) {
-    widgets::card(ui, icon::SPEAKER_HIGH, "Volume", |ui| {
-        ui.label("Fine control at low volume");
+    widgets::card(ui, icon::SPEAKER_HIGH, &t!("Volume"), |ui| {
+        ui.label(t!("Fine control at low volume"));
         ui.horizontal(|ui| {
             ui.spacing_mut().slider_width = (ui.available_width() - 200.0).clamp(120.0, 320.0);
             ui.add(
                 egui::Slider::new(&mut s.curve, 0.5..=3.0)
                     .step_by(0.1)
-                    .custom_formatter(|v, _| if (v - 1.0).abs() < 0.05 { "off".into() } else { format!("{v:.1}") }),
+                    .custom_formatter(|v, _| if (v - 1.0).abs() < 0.05 { t!("off").into() } else { format!("{v:.1}") }),
             );
             ui.add_space(SP_S);
             curve_preview(ui, s.curve);
         });
         widgets::hint(
             ui,
-            "Off: faders follow the system volume slider. Higher: more of the fader's travel for quiet volumes.",
+            &t!("Off: faders follow the system volume slider. Higher: more of the fader's travel for quiet volumes."),
         );
-        widgets::toggle(ui, &mut s.allow_boost, "Allow boosting above 100% (up to 150%)");
-        widgets::toggle(ui, &mut s.pickup, "Pick up: a fader only takes over once it reaches the volume");
+        widgets::toggle(ui, &mut s.allow_boost, &t!("Allow boosting above 100% (up to 150%)"));
+        widgets::toggle(ui, &mut s.pickup, &t!("Pick up: a fader only takes over once it reaches the volume"));
         widgets::hint(
             ui,
-            "Stops jumps when a volume was changed elsewhere. The mixer shows where your fader is in amber.",
+            &t!("Stops jumps when a volume was changed elsewhere. The mixer shows where your fader is in amber."),
         );
     });
 }
@@ -1180,22 +1222,24 @@ fn fetch_obs_scenes(ctx: &egui::Context) {
 
 /// obs-websocket connection for OBS button actions.
 fn obs_card(ui: &mut egui::Ui, s: &mut Settings, events: &crossbeam_channel::Sender<crate::engine::Event>) {
-    widgets::card(ui, icon::VIDEO_CAMERA, "OBS Studio", |ui| {
-        widgets::hint(ui, "For OBS buttons. In OBS: Tools → WebSocket Server Settings.");
+    widgets::card(ui, icon::VIDEO_CAMERA, &t!("OBS Studio"), |ui| {
+        widgets::hint(ui, &t!("For OBS buttons. In OBS: Tools → WebSocket Server Settings."));
         egui::Grid::new("obs").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label("Address");
+            ui.label(t!("Address"));
             ui.add(egui::TextEdit::singleline(&mut s.obs_url).desired_width(220.0));
             ui.end_row();
-            ui.label("Password");
+            ui.label(t!("Password"));
             ui.add(egui::TextEdit::singleline(&mut s.obs_password).password(true).desired_width(220.0));
             ui.end_row();
         });
         ui.horizontal(|ui| {
-            if ui.button(format!("{}  Test connection", icon::PLUGS_CONNECTED)).clicked() {
+            if ui.button(format!("{}  {}", icon::PLUGS_CONNECTED, t!("Test connection"))).clicked() {
                 let (url, password, events) = (s.obs_url.clone(), s.obs_password.clone(), events.clone());
                 std::thread::spawn(move || {
                     let n = match crate::obs::check(&url, &password) {
-                        Ok(v) => crate::engine::Notice::Info(format!("Connected to OBS {v}")),
+                        Ok(v) => {
+                            crate::engine::Notice::Info(t!("Connected to OBS %{version}", version = v).to_string())
+                        }
                         Err(e) => crate::engine::Notice::Problem(e.to_string()),
                     };
                     let _ = events.send(crate::engine::Event::Notice(n));
@@ -1207,16 +1251,16 @@ fn obs_card(ui: &mut egui::Ui, s: &mut Settings, events: &crossbeam_channel::Sen
 
 /// Options most people never need.
 fn advanced_card(ui: &mut egui::Ui, s: &mut Settings, ports_out: &[String]) {
-    widgets::card(ui, icon::WRENCH, "Advanced", |ui| {
-        widgets::toggle(ui, &mut s.led_heartbeat, "LED heartbeat: resend LED states every 5 s");
-        widgets::hint(ui, "For devices that forget their LEDs.");
+    widgets::card(ui, icon::WRENCH, &t!("Advanced"), |ui| {
+        widgets::toggle(ui, &mut s.led_heartbeat, &t!("LED heartbeat: resend LED states every 5 s"));
+        widgets::hint(ui, &t!("For devices that forget their LEDs."));
         ui.horizontal(|ui| {
-            ui.label("Encoder clicks from 0 to 100%");
+            ui.label(t!("Encoder clicks from 0 to 100%"));
             ui.add(egui::DragValue::new(&mut s.default_steps).range(5..=400));
         });
-        widgets::hint(ui, "For endless knobs whose profile doesn't say.");
+        widgets::hint(ui, &t!("For endless knobs whose profile doesn't say."));
         ui.horizontal(|ui| {
-            ui.label("Forward all MIDI input to");
+            ui.label(t!("Forward all MIDI input to"));
             port_combo(ui, "passthru", &mut s.passthru, ports_out);
         });
     });

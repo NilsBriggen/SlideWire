@@ -2,6 +2,7 @@
 
 use crossbeam_channel::Sender;
 use ksni::blocking::TrayMethods;
+use rust_i18n::t;
 
 use crate::WindowCmd;
 use crate::engine::{Event, SharedRef, UiCmd};
@@ -33,15 +34,15 @@ impl ksni::Tray for Tray {
     }
     fn tool_tip(&self) -> ksni::ToolTip {
         let sh = self.shared.lock().unwrap();
-        let profile = sh.active().map(|p| p.name.clone()).unwrap_or_else(|| "no profile".into());
-        let device = if sh.connected_in.is_some() { "connected" } else { "device not connected" };
+        let profile = sh.active().map(|p| p.name.clone()).unwrap_or_else(|| t!("no profile").to_string());
+        let device = if sh.connected_in.is_some() { t!("connected") } else { t!("device not connected") };
         let mut lines = vec![format!("{profile} — {device}")];
         if let Some(p) = sh.active().filter(|p| p.bank_count() > 1) {
-            lines.push(format!("Bank {} of {}", p.bank + 1, p.bank_count()));
+            lines.push(t!("Bank %{bank} of %{banks}", bank = p.bank + 1, banks = p.bank_count()).to_string());
         }
         if let Some(d) = sh.audio.sinks.iter().find(|d| d.name == sh.audio.default_sink) {
-            let vol = if d.mute { "muted".to_string() } else { format!("{:.0}%", d.volume * 100.0) };
-            lines.push(format!("{}: {vol} (scroll to change)", d.label));
+            let vol = if d.mute { t!("muted").to_string() } else { format!("{:.0}%", d.volume * 100.0) };
+            lines.push(t!("%{device}: %{volume} (scroll to change)", device = d.label, volume = vol).to_string());
         }
         ksni::ToolTip { title: "Slidewire".into(), description: lines.join("\n"), ..Default::default() }
     }
@@ -90,7 +91,7 @@ impl ksni::Tray for Tray {
         if !scene_items.is_empty() {
             extra.push(
                 SubMenu {
-                    label: "Scenes".into(),
+                    label: t!("Scenes").to_string(),
                     icon_name: "bookmarks".into(),
                     submenu: scene_items,
                     ..Default::default()
@@ -99,11 +100,12 @@ impl ksni::Tray for Tray {
             );
         }
         if banks > 1 {
-            let options =
-                (0..banks).map(|b| RadioItem { label: format!("Bank {}", b + 1), ..Default::default() }).collect();
+            let options = (0..banks)
+                .map(|b| RadioItem { label: t!("Bank %{bank}", bank = b + 1).to_string(), ..Default::default() })
+                .collect();
             extra.push(
                 SubMenu {
-                    label: "Bank".into(),
+                    label: t!("Bank").to_string(),
                     submenu: vec![
                         RadioGroup {
                             selected: bank,
@@ -121,7 +123,7 @@ impl ksni::Tray for Tray {
         }
         vec![
             StandardItem {
-                label: "Open Slidewire".into(),
+                label: t!("Open Slidewire").to_string(),
                 icon_name: "configure".into(),
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.window.send(WindowCmd::Show);
@@ -131,7 +133,7 @@ impl ksni::Tray for Tray {
             .into(),
             MenuItem::Separator,
             SubMenu {
-                label: "Profile".into(),
+                label: t!("Profile").to_string(),
                 submenu: vec![
                     RadioGroup {
                         selected,
@@ -152,7 +154,7 @@ impl ksni::Tray for Tray {
         .chain(extra)
         .chain([
             CheckmarkItem {
-                label: "Mute microphone".into(),
+                label: t!("Mute microphone").to_string(),
                 checked: mic_muted,
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.events.send(Event::Ui(UiCmd::ToggleMicMute));
@@ -161,7 +163,7 @@ impl ksni::Tray for Tray {
             }
             .into(),
             CheckmarkItem {
-                label: "Mute all outputs".into(),
+                label: t!("Mute all outputs").to_string(),
                 checked: all_muted,
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.events.send(Event::Ui(UiCmd::MuteAll));
@@ -171,7 +173,7 @@ impl ksni::Tray for Tray {
             .into(),
             MenuItem::Separator,
             StandardItem {
-                label: "Quit".into(),
+                label: t!("Quit").to_string(),
                 icon_name: "application-exit".into(),
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.window.send(WindowCmd::Quit);

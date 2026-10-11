@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, RichText, vec2};
+use rust_i18n::t;
 
 use super::theme::{icon, *};
 use super::{App, widgets};
@@ -57,24 +58,24 @@ impl App {
                     ui.add(egui::Image::new(logo).fit_to_exact_size(vec2(36.0, 36.0)));
                 }
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Welcome to Slidewire").font(semibold(20.0)));
-                    widgets::hint(ui, "Three quick steps and your controller runs your volumes.");
+                    ui.label(RichText::new(t!("Welcome to Slidewire")).font(semibold(20.0)));
+                    widgets::hint(ui, &t!("Three quick steps and your controller runs your volumes."));
                 });
             });
             ui.add_space(SP_S * 2.0);
             match step {
                 0 => {
-                    step_title(ui, 1, "Connect your controller");
+                    step_title(ui, 1, &t!("Connect your controller"));
                     let nano = |port: &str| port.to_lowercase().contains("nanokontrol2");
                     if let Some(port) = &connected {
-                        ok_line(ui, &format!("{} is connected.", crate::midi::display_name(port)));
+                        ok_line(ui, &t!("%{device} is connected.", device = crate::midi::display_name(port)));
                     } else if ports.is_empty() {
-                        widgets::hint(ui, "No MIDI devices found. Plug yours in; it shows up here right away.");
-                        if ui.button(format!("{}  Why isn't it showing up?", icon::STETHOSCOPE)).clicked() {
+                        widgets::hint(ui, &t!("No MIDI devices found. Plug yours in; it shows up here right away."));
+                        if ui.button(format!("{}  {}", icon::STETHOSCOPE, t!("Why isn't it showing up?"))).clicked() {
                             self.show_doctor = true;
                         }
                     } else {
-                        widgets::hint(ui, "Pick it from the list:");
+                        widgets::hint(ui, &t!("Pick it from the list:"));
                         for port in ports.iter().filter(|p| !p.contains("Through")) {
                             let name = crate::midi::display_name(port);
                             let pattern = name.trim_end_matches(" (raw)").to_string();
@@ -95,18 +96,17 @@ impl App {
                     if let Some(other) = self.welcome_other.clone() {
                         ui.add_space(SP_S);
                         egui::Frame::new().fill(pal().inset).corner_radius(8).inner_margin(10).show(ui, |ui| {
-                            ui.label(RichText::new(format!("{other} isn't a nanoKONTROL2")).strong());
+                            ui.label(RichText::new(t!("%{device} isn't a nanoKONTROL2", device = other)).strong());
                             widgets::hint(
                                 ui,
-                                "MIDI Mixer for Windows has presets for many controllers; import one, \
-                                 or map your controls by moving them.",
+                                &t!("MIDI Mixer for Windows has presets for many controllers; import one, or map your controls by moving them."),
                             );
                             ui.horizontal(|ui| {
-                                if ui.button(format!("{}  Import a preset", icon::DOWNLOAD_SIMPLE)).clicked() {
+                                if ui.button(format!("{}  {}", icon::DOWNLOAD_SIMPLE, t!("Import a preset"))).clicked() {
                                     self.tab = super::Tab::Profiles;
                                     close = true;
                                 }
-                                if ui.button(format!("{}  Map my controller", icon::CROSSHAIR)).clicked() {
+                                if ui.button(format!("{}  {}", icon::CROSSHAIR, t!("Map my controller"))).clicked() {
                                     let id = crate::profile::new_id();
                                     let p = crate::profile::Profile {
                                         name: other.clone(),
@@ -127,18 +127,18 @@ impl App {
                     }
                 }
                 _ => {
-                    step_title(ui, 2, "Move a fader or knob");
+                    step_title(ui, 2, &t!("Move a fader or knob"));
                     match (touched, last_msg.filter(|(_, t)| *t > since)) {
-                        (Some(name), _) => ok_line(ui, &format!("Got it: {name}")),
+                        (Some(name), _) => ok_line(ui, &t!("Got it: %{control}", control = name)),
                         (None, Some((msg, _))) => {
-                            ok_line(ui, &format!("Got a message ({msg})"));
-                            widgets::hint(ui, "It isn't mapped in this profile yet; map it on the Controller page.");
+                            ok_line(ui, &t!("Got a message (%{message})", message = msg));
+                            widgets::hint(ui, &t!("It isn't mapped in this profile yet; map it on the Controller page."));
                         }
                         (None, None) => {
                             let t = ui.input(|i| i.time) as f32;
                             let c = pal().text_dim.gamma_multiply(0.6 + 0.4 * (t * 3.0).sin().abs());
                             ui.label(
-                                RichText::new(format!("{}  Waiting for your controller…", icon::WAVEFORM)).color(c),
+                                RichText::new(format!("{}  {}", icon::WAVEFORM, t!("Waiting for your controller…"))).color(c),
                             );
                             ui.ctx().request_repaint_after(Duration::from_millis(50));
                         }
@@ -149,13 +149,13 @@ impl App {
             ui.horizontal(|ui| {
                 progress_dots(ui, step);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Button::new(RichText::new("Next").strong()).fill(pal().accent_bg)).clicked() {
+                    if ui.add(egui::Button::new(RichText::new(t!("Next")).strong()).fill(pal().accent_bg)).clicked() {
                         go = Some(1);
                     }
-                    if step > 0 && ui.button("Back").clicked() {
+                    if step > 0 && ui.button(t!("Back")).clicked() {
                         go = Some(-1);
                     }
-                    if ui.link("Skip").clicked() {
+                    if ui.link(t!("Skip")).clicked() {
                         close = true;
                     }
                 });
@@ -195,37 +195,39 @@ impl App {
             .frame(egui::Frame::popup(&ctx.global_style()).inner_margin(18).corner_radius(14))
             .show(ctx, |ui| {
                 ui.set_width(420.0);
-                step_title(ui, 3, "Assign your first app");
+                step_title(ui, 3, &t!("Assign your first app"));
                 match &assigned {
                     Some((strip, what)) => {
-                        ok_line(ui, &format!("{strip} now controls {what}."));
-                        widgets::hint(ui, "Move that fader on your controller and listen.");
+                        ok_line(ui, &t!("%{strip} now controls %{target}.", strip = strip, target = what));
+                        widgets::hint(ui, &t!("Move that fader on your controller and listen."));
                     }
                     None => {
-                        ui.label("Drag an app from Sources (on the right) onto a strip, or click a strip's S button.");
+                        ui.label(t!(
+                            "Drag an app from Sources (on the right) onto a strip, or click a strip's S button."
+                        ));
                     }
                 }
                 ui.add_space(4.0);
                 for (k, what) in [
-                    ("S", "lists what a strip controls"),
-                    ("M", "mutes it"),
-                    ("R", "makes a device the default, or starts the app"),
+                    ("S", t!("lists what a strip controls")),
+                    ("M", t!("mutes it")),
+                    ("R", t!("makes a device the default, or starts the app")),
                 ] {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(k).font(mono(13.0)).color(pal().accent));
                         ui.label(what);
                     });
                 }
-                widgets::hint(ui, "Press F1 any time for keyboard shortcuts.");
+                widgets::hint(ui, &t!("Press F1 any time for keyboard shortcuts."));
                 ui.add_space(SP_S);
                 ui.horizontal(|ui| {
                     progress_dots(ui, STEPS - 1);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let label = if assigned.is_some() { "Start mixing" } else { "Later" };
+                        let label = if assigned.is_some() { t!("Start mixing") } else { t!("Later") };
                         if ui.add(egui::Button::new(RichText::new(label).strong()).fill(pal().accent_bg)).clicked() {
                             close = true;
                         }
-                        if ui.button("Back").clicked() {
+                        if ui.button(t!("Back")).clicked() {
                             back = true;
                         }
                     });

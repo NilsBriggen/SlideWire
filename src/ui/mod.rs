@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui::{self, Color32, RichText, Sense, Stroke, Vec2, pos2, vec2};
+use rust_i18n::t;
 
 use crate::WindowCmd;
 use crate::engine::{Event, Notice, SharedRef, UiCmd};
@@ -272,17 +273,19 @@ impl App {
                     let pulse = 0.6 + 0.4 * (t * 4.0).sin().abs();
                     ui.label(RichText::new(icon::CROSSHAIR).color(ASSIGN.gamma_multiply(pulse)).size(16.0));
                     ui.label(
-                        RichText::new(format!(
-                            "Move or press the control for {} on your controller…",
-                            name.as_deref().unwrap_or("this")
-                        ))
+                        RichText::new(match name.as_deref() {
+                            Some(control) => {
+                                t!("Move or press the control for %{control} on your controller…", control = control)
+                            }
+                            None => t!("Move or press the control for this on your controller…"),
+                        })
                         .strong(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("Cancel")).clicked() {
                             stop = true;
                         }
-                        widgets::hint(ui, "Esc cancels");
+                        widgets::hint(ui, &t!("Esc cancels"));
                     });
                 });
                 ui.ctx().request_repaint_after(Duration::from_millis(50));
@@ -319,8 +322,8 @@ impl App {
 
     /// Empty state for pages that need a profile.
     pub(super) fn no_profile(&mut self, ui: &mut egui::Ui) {
-        widgets::card(ui, icon::PIANO_KEYS, "No controller profile yet", |ui| {
-            ui.label("A profile says which controls your controller has and what they do.");
+        widgets::card(ui, icon::PIANO_KEYS, &t!("No controller profile yet"), |ui| {
+            ui.label(t!("A profile says which controls your controller has and what they do."));
             ui.add_space(SP_S);
             ui.horizontal_wrapped(|ui| {
                 if ui.button(format!("{}  Korg nanoKONTROL2", icon::PLUS)).clicked() {
@@ -331,12 +334,12 @@ impl App {
                     drop(sh);
                     self.send(UiCmd::ActivateProfile(id));
                 }
-                if ui.button(format!("{}  Import a MIDI Mixer preset", icon::DOWNLOAD_SIMPLE)).clicked() {
+                if ui.button(format!("{}  {}", icon::DOWNLOAD_SIMPLE, t!("Import a MIDI Mixer preset"))).clicked() {
                     self.tab = Tab::Profiles;
                 }
-                if ui.button(format!("{}  Map my own controller", icon::CROSSHAIR)).clicked() {
+                if ui.button(format!("{}  {}", icon::CROSSHAIR, t!("Map my own controller"))).clicked() {
                     let id = crate::profile::new_id();
-                    let p = Profile { name: "My controller".into(), ..Default::default() };
+                    let p = Profile { name: t!("My controller").to_string(), ..Default::default() };
                     let mut sh = self.shared.lock().unwrap();
                     sh.store.profiles.insert(id.clone(), p);
                     sh.store.touch(&id);
@@ -359,7 +362,7 @@ impl App {
         let current = |id: &str| shared.lock().unwrap().store.profiles.get(id).cloned();
         let step = if redo { self.history.borrow_mut().redo(current) } else { self.history.borrow_mut().undo(current) };
         let Some((id, p)) = step else {
-            self.flash(if redo { "Nothing to redo" } else { "Nothing to undo" });
+            self.flash(if redo { t!("Nothing to redo") } else { t!("Nothing to undo") });
             return;
         };
         let mut sh = self.shared.lock().unwrap();
@@ -367,7 +370,7 @@ impl App {
         sh.store.touch(&id);
         drop(sh);
         self.send(UiCmd::ProfileEdited);
-        self.toast(icon::ARROW_COUNTER_CLOCKWISE, if redo { "Redone" } else { "Undone" }, None, None);
+        self.toast(icon::ARROW_COUNTER_CLOCKWISE, if redo { t!("Redone") } else { t!("Undone") }, None, None);
     }
 
     /// Turn the engine's notices into toasts.
@@ -375,17 +378,21 @@ impl App {
         let notices = std::mem::take(&mut self.shared.lock().unwrap().notices);
         for n in notices {
             match n {
-                Notice::Connected(d) => self.toast(icon::PLUGS_CONNECTED, format!("{d} connected"), Some(RUN), None),
-                Notice::Disconnected(d) => self.toast(icon::PLUGS, format!("{d} disconnected"), Some(ASSIGN), None),
-                Notice::ProfileSwitched(p) => {
-                    self.toast(icon::FOLDER_SIMPLE, format!("Switched to \"{p}\""), None, None)
+                Notice::Connected(d) => {
+                    self.toast(icon::PLUGS_CONNECTED, t!("%{device} connected", device = d), Some(RUN), None)
                 }
-                Notice::Bank(b) => self.toast(icon::STACK, format!("Bank {}", b + 1), None, None),
+                Notice::Disconnected(d) => {
+                    self.toast(icon::PLUGS, t!("%{device} disconnected", device = d), Some(ASSIGN), None)
+                }
+                Notice::ProfileSwitched(p) => {
+                    self.toast(icon::FOLDER_SIMPLE, t!("Switched to \"%{profile}\"", profile = p), None, None)
+                }
+                Notice::Bank(b) => self.toast(icon::STACK, t!("Bank %{bank}", bank = b + 1), None, None),
                 Notice::Info(t) => self.toast(icon::INFO, t, None, None),
                 Notice::Problem(t) => self.problem(t),
                 Notice::SceneRecalled(name) => self.toast(
                     icon::BOOKMARKS_SIMPLE,
-                    format!("Scene \"{name}\" recalled"),
+                    t!("Scene \"%{scene}\" recalled", scene = name),
                     None,
                     Some(ToastUndo::Scene),
                 ),
@@ -435,14 +442,14 @@ impl App {
                                     ui.add(egui::Label::new(&t.text).wrap());
                                 });
                                 if let Some(u) = t.undo
-                                    && ui.button(RichText::new("Undo").color(pal().accent)).clicked()
+                                    && ui.button(RichText::new(t!("Undo")).color(pal().accent)).clicked()
                                 {
                                     undo = Some((i, u));
                                 }
-                                if t.sticky && widgets::icon_framed(ui, icon::COPY, "Copy the message").clicked() {
+                                if t.sticky && widgets::icon_framed(ui, icon::COPY, &t!("Copy the message")).clicked() {
                                     copy = Some(t.text.clone());
                                 }
-                                if widgets::icon_framed(ui, icon::X, "Dismiss").clicked() {
+                                if widgets::icon_framed(ui, icon::X, &t!("Dismiss")).clicked() {
                                     close = Some(i);
                                 }
                             });
@@ -533,7 +540,7 @@ impl App {
 
     fn shortcuts_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_shortcuts;
-        egui::Window::new("Keyboard shortcuts")
+        egui::Window::new(t!("Keyboard shortcuts"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -542,15 +549,15 @@ impl App {
             .show(ctx, |ui| {
                 egui::Grid::new("keys").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
                     for (keys, what) in [
-                        ("Ctrl+1 … Ctrl+6", "Switch pages"),
-                        ("1 … 9", "Pick a channel strip (Mixer)"),
-                        ("↑ / ↓", "Move its fader 5% (Shift: 1%)"),
-                        ("M", "Mute it"),
-                        ("Esc", "Let go of the strip"),
-                        ("Ctrl+F", "Filter the sources"),
-                        ("Ctrl+Z", "Undo a change to assignments or the profile"),
-                        ("Ctrl+Shift+Z", "Redo"),
-                        ("F1", "This list"),
+                        ("Ctrl+1 … Ctrl+6", t!("Switch pages")),
+                        ("1 … 9", t!("Pick a channel strip (Mixer)")),
+                        ("↑ / ↓", t!("Move its fader 5% (Shift: 1%)")),
+                        ("M", t!("Mute it")),
+                        ("Esc", t!("Let go of the strip")),
+                        ("Ctrl+F", t!("Filter the sources")),
+                        ("Ctrl+Z", t!("Undo a change to assignments or the profile")),
+                        ("Ctrl+Shift+Z", t!("Redo")),
+                        ("F1", t!("This list")),
                     ] {
                         ui.label(RichText::new(keys).font(mono(12.5)).color(pal().accent));
                         ui.label(what);
@@ -566,8 +573,8 @@ impl App {
         let ctx = self.shared.lock().unwrap().egui.clone();
         std::thread::spawn(move || {
             let path = match &purpose {
-                PickPurpose::Import => crate::portal::pick_json("Import a profile", None),
-                PickPurpose::Export(_) => crate::portal::pick_json("Export the profile", Some("profile.json")),
+                PickPurpose::Import => crate::portal::pick_json(&t!("Import a profile"), None),
+                PickPurpose::Export(_) => crate::portal::pick_json(&t!("Export the profile"), Some("profile.json")),
             };
             if let Some(path) = path {
                 *slot.lock().unwrap() = Some((purpose, path));
@@ -596,10 +603,10 @@ impl App {
                     let res = self.shared.lock().unwrap().store.profiles.get(&id).map(|p| p.to_spec_json());
                     match res {
                         Some(Ok(json)) => match std::fs::write(&path, json) {
-                            Ok(()) => self.flash(format!("Exported to {}", path.display())),
-                            Err(e) => self.problem(format!("Export failed: {e}")),
+                            Ok(()) => self.flash(t!("Exported to %{path}", path = path.display())),
+                            Err(e) => self.problem(t!("Export failed: %{error}", error = e)),
                         },
-                        _ => self.flash("Nothing to export"),
+                        _ => self.flash(t!("Nothing to export")),
                     }
                 }
             }
@@ -632,14 +639,14 @@ impl App {
 
             let mut underline = None;
             for (t, ic, label) in [
-                (Tab::Mixer, icon::FADERS, "Mixer"),
-                (Tab::Controller, icon::SLIDERS_HORIZONTAL, "Controller"),
-                (Tab::Buttons, icon::CURSOR_CLICK, "Buttons"),
-                (Tab::Profiles, icon::FOLDER_SIMPLE, "Profiles"),
-                (Tab::Settings, icon::GEAR_SIX, "Settings"),
-                (Tab::Log, icon::LIST_BULLETS, "Log"),
+                (Tab::Mixer, icon::FADERS, t!("Mixer")),
+                (Tab::Controller, icon::SLIDERS_HORIZONTAL, t!("Controller")),
+                (Tab::Buttons, icon::CURSOR_CLICK, t!("Buttons")),
+                (Tab::Profiles, icon::FOLDER_SIMPLE, t!("Profiles")),
+                (Tab::Settings, icon::GEAR_SIX, t!("Settings")),
+                (Tab::Log, icon::LIST_BULLETS, t!("Log")),
             ] {
-                let r = tab_button(ui, ic, label, self.tab == t, icons_only);
+                let r = tab_button(ui, ic, &label, self.tab == t, icons_only);
                 if r.clicked() {
                     self.tab = t;
                 }
@@ -670,24 +677,24 @@ impl App {
                     (Some(port), Some(p)) => {
                         (if blink { ASSIGN } else { RUN }, format!("{p} · {}", crate::midi::display_name(port)))
                     }
-                    (None, Some(_)) if icons_only => (MUTE, "Not connected".into()),
-                    (None, Some(p)) => (MUTE, format!("{p} · not connected")),
-                    _ => (pal().text_faint, "No profile".into()),
+                    (None, Some(_)) if icons_only => (MUTE, t!("Not connected").to_string()),
+                    (None, Some(p)) => (MUTE, t!("%{profile} · not connected", profile = p).to_string()),
+                    _ => (pal().text_faint, t!("No profile").to_string()),
                 };
                 let pill = widgets::pill(ui, Some(led), &text)
                     .interact(Sense::click())
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text("Connection check");
+                    .on_hover_text(t!("Connection check"));
                 if pill.clicked() {
                     self.show_doctor = !self.show_doctor;
                     self.doctor = None;
                 }
                 if !pulse {
-                    widgets::pill(ui, Some(MUTE), "Audio server offline");
+                    widgets::pill(ui, Some(MUTE), &t!("Audio server offline"));
                 }
                 if !focus.class.is_empty() && width > 1200.0 {
                     widgets::pill(ui, None, &format!("{}  {}", icon::CROSSHAIR, focus.class))
-                        .on_hover_text("Focused app");
+                        .on_hover_text(t!("Focused app"));
                 }
             });
         });
@@ -709,7 +716,7 @@ impl App {
         }
         let checks = self.doctor.as_ref().map(|(_, c)| c.clone()).unwrap_or_default();
         let mut open = true;
-        egui::Window::new(format!("{}  Connection check", icon::STETHOSCOPE))
+        egui::Window::new(format!("{}  {}", icon::STETHOSCOPE, t!("Connection check")))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -733,7 +740,7 @@ impl App {
                     });
                     ui.add_space(4.0);
                 }
-                widgets::hint(ui, "Updates every 2 seconds. Same checks from a terminal: slidewire --doctor");
+                widgets::hint(ui, &t!("Updates every 2 seconds. Same checks from a terminal: slidewire --doctor"));
             });
         ctx.request_repaint_after(Duration::from_secs(1));
         self.show_doctor = open;
@@ -793,7 +800,7 @@ impl App {
                 {
                     answer = Some(2);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t!("Cancel")).clicked() {
                     answer = Some(0);
                 }
             });
@@ -829,11 +836,11 @@ impl App {
         let res = self.shared.lock().unwrap().store.import(std::path::Path::new(path), trusted);
         match res {
             Ok(id) => {
-                self.flash("Profile imported");
+                self.flash(t!("Profile imported"));
                 self.send(UiCmd::ActivateProfile(id));
                 self.import_path.clear();
             }
-            Err(e) => self.problem(format!("Import failed: {e:#}")),
+            Err(e) => self.problem(t!("Import failed: %{error}", error = format!("{e:#}"))),
         }
     }
 }
