@@ -426,6 +426,15 @@ pub struct GroupSettings {
     /// How the mixer draws this group; guessed from the controls if unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub widget: Option<Widget>,
+    /// Name shown on the strip instead of the group name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Index into the strip colours; the accent colour if unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<u8>,
+    /// Icon name shown on the strip instead of the target's own icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -437,7 +446,7 @@ pub enum Widget {
 
 impl Default for GroupSettings {
     fn default() -> Self {
-        Self { targets: Vec::new(), max_volume: 1.0, widget: None }
+        Self { targets: Vec::new(), max_volume: 1.0, widget: None, label: None, color: None, icon: None }
     }
 }
 

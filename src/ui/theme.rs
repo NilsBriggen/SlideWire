@@ -32,6 +32,23 @@ pub const METER_HIGH: Color32 = Color32::from_rgb(0xff, 0x3b, 0x3b);
 
 pub const RADIUS: u8 = 6;
 
+/// Colours a strip can be given; glows and LCD text use them.
+pub const STRIP_COLORS: [(Color32, &str); 8] = [
+    (Color32::from_rgb(0x4c, 0xc9, 0xf0), "Cyan"),
+    (Color32::from_rgb(0x5b, 0x8d, 0xff), "Blue"),
+    (Color32::from_rgb(0xa7, 0x8b, 0xfa), "Violet"),
+    (Color32::from_rgb(0xf4, 0x72, 0xb6), "Pink"),
+    (Color32::from_rgb(0xff, 0x5c, 0x5c), "Red"),
+    (Color32::from_rgb(0xff, 0x96, 0x3b), "Orange"),
+    (Color32::from_rgb(0xfa, 0xd0, 0x2c), "Yellow"),
+    (Color32::from_rgb(0x4a, 0xde, 0x80), "Green"),
+];
+
+/// A strip's colour: its own, or the accent.
+pub fn strip_color(index: Option<u8>) -> Color32 {
+    index.and_then(|i| STRIP_COLORS.get(i as usize)).map_or_else(|| pal().accent, |c| c.0)
+}
+
 /// Base spacing unit.
 pub const SP_S: f32 = 8.0;
 

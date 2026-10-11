@@ -130,7 +130,8 @@ impl App {
                             pal().strip_top,
                             pal().strip_bottom,
                         );
-                        self.section(ui, s, rect, &audio, false, Some(&s.name), dragging);
+                        let title = s.label.clone().unwrap_or_else(|| s.name.clone());
+                        self.section(ui, s, rect, &audio, false, Some(&title), dragging);
                     }
                 });
                 ui.add_space(14.0);
@@ -226,7 +227,15 @@ impl App {
         let painter = ui.painter_at(rect.expand(12.0));
         widgets::bevel_panel(&painter, rect, 8, pal().strip_top, pal().strip_bottom);
         let head = egui::Rect::from_min_size(rect.min, vec2(rect.width(), 28.0));
-        painter.text(head.center(), egui::Align2::CENTER_CENTER, c.no.to_string(), semibold(15.0), pal().text_dim);
+        let label = c.fader.label.as_ref().or(c.knob.label.as_ref());
+        let color = c.fader.color.or(c.knob.color);
+        if let Some(i) = color {
+            // A coloured band across the top, like tape on a real console.
+            let band = egui::Rect::from_min_size(rect.min + vec2(10.0, 4.0), vec2(rect.width() - 20.0, 3.0));
+            widgets::glow(&painter, band, 1.5, theme::strip_color(Some(i)).gamma_multiply(0.5), 6.0);
+            painter.rect_filled(band, 1.5, theme::strip_color(Some(i)));
+        }
+        strip_header(&painter, head.shrink2(vec2(8.0, 0.0)), c.no, label.map(String::as_str));
         let split = head.bottom() + CHANNEL_KNOB_H;
         let knob_zone =
             egui::Rect::from_min_max(egui::pos2(rect.left(), head.bottom()), egui::pos2(rect.right(), split));
@@ -302,18 +311,23 @@ impl App {
                 } else {
                     "empty".into()
                 };
-                let img = self
-                    .icons
-                    .image(&s.icon_hint)
+                let img = s
+                    .icon
+                    .as_ref()
+                    .and_then(|i| self.icons.image(std::slice::from_ref(i)))
+                    .or_else(|| self.icons.image(&s.icon_hint))
                     .or_else(|| s.targets.first().and_then(|t| self.icons.image(&[target_icon_name(t).to_string()])));
                 let dim = s.muted || s.resolved.is_empty();
-                let r = widgets::lcd(ui, vec2(inner.width(), if compact { 24.0 } else { 30.0 }), img, &text, dim);
+                let tint = s.color.map(|i| theme::strip_color(Some(i)));
+                let size = vec2(inner.width(), if compact { 24.0 } else { 30.0 });
+                let r = widgets::lcd(ui, size, img, &text, dim, tint);
                 if !empty {
                     r.on_hover_text(&text);
                 }
 
                 let hold = self.peak_hold(ui, s);
-                let color = if s.muted { pal().accent.gamma_multiply(0.35) } else { pal().accent };
+                let color = theme::strip_color(s.color);
+                let color = if s.muted { color.gamma_multiply(0.35) } else { color };
                 let mut pos = s.position;
                 if compact {
                     let d = 58.0;
@@ -367,7 +381,9 @@ impl App {
         if empty && !dragging {
             painter.rect_filled(zone.shrink(1.0), 8.0, pal().veil(120));
         }
-        response.context_menu(|ui| self.assign_menu(ui, s, audio));
+        egui::Popup::context_menu(&response)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| self.assign_menu(ui, s, audio));
     }
 
     /// S (assign menu), M (mute) and, with `run`, R buttons.
@@ -403,8 +419,10 @@ impl App {
     }
 
     fn assign_menu(&mut self, ui: &mut egui::Ui, s: &StripView, audio: &AudioState) {
-        ui.set_min_width(260.0);
-        ui.label(RichText::new(format!("{}  {}", icon::TARGET, s.name)).font(semibold(14.0)));
+        // Fixed width: right-aligned rows would otherwise stretch the popup.
+        ui.set_width(300.0);
+        let title = s.label.as_deref().unwrap_or(&s.name);
+        ui.label(RichText::new(format!("{}  {title}", icon::TARGET)).font(semibold(14.0)));
         if s.targets.is_empty() {
             widgets::hint(ui, "Nothing assigned yet.");
         }
@@ -433,6 +451,7 @@ impl App {
         ui.separator();
         self.target_menu(ui, &s.id, audio);
         ui.separator();
+        self.identity_menu(ui, s, audio);
         ui.horizontal(|ui| {
             ui.label("Show as");
             let gid = s.id.clone();
@@ -443,6 +462,103 @@ impl App {
                 self.edit_profile(|p| p.assignments.entry(gid).or_default().widget = Some(Widget::Knob));
             }
         });
+    }
+
+    /// Name, colour and icon of the strip, and clearing it.
+    fn identity_menu(&mut self, ui: &mut egui::Ui, s: &StripView, audio: &AudioState) {
+        let gid = s.id.clone();
+        if self.rename.as_ref().is_none_or(|(id, _)| *id != gid) {
+            self.rename = Some((gid.clone(), s.label.clone().unwrap_or_default()));
+        }
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            let (_, text) = self.rename.as_mut().unwrap();
+            let r = ui.add(egui::TextEdit::singleline(text).hint_text(&s.name).desired_width(200.0));
+            if r.changed() {
+                let label = Some(text.trim().to_string()).filter(|t| !t.is_empty());
+                let gid = gid.clone();
+                self.edit_profile(|p| p.current_mut().entry(gid).or_default().label = label);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Colour");
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let mut pick = None;
+            if widgets::swatch(ui, pal().accent, s.color.is_none(), "Accent colour").clicked() {
+                pick = Some(None);
+            }
+            for (i, (c, name)) in STRIP_COLORS.iter().enumerate() {
+                if widgets::swatch(ui, *c, s.color == Some(i as u8), name).clicked() {
+                    pick = Some(Some(i as u8));
+                }
+            }
+            if let Some(color) = pick {
+                let gid = gid.clone();
+                self.edit_profile(|p| p.current_mut().entry(gid).or_default().color = color);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Icon");
+            let current = s.icon.as_ref().and_then(|i| self.icons.image(std::slice::from_ref(i)));
+            if let Some(img) = current {
+                ui.add(img.fit_to_exact_size(Vec2::splat(20.0)));
+            } else {
+                widgets::hint(ui, "Automatic");
+            }
+            ui.menu_button("Change", |ui| {
+                if ui.button("Automatic (from what's assigned)").clicked() {
+                    let gid = gid.clone();
+                    self.edit_profile(|p| p.current_mut().entry(gid).or_default().icon = None);
+                    ui.close();
+                }
+                ui.separator();
+                // Icons of running apps first, then some generic ones.
+                let mut names: Vec<String> = Vec::new();
+                for a in audio.apps.iter().chain(&audio.app_inputs) {
+                    for n in [&a.icon, &a.binary] {
+                        if !n.is_empty() && self.icons.image(std::slice::from_ref(n)).is_some() {
+                            names.push(n.clone());
+                            break;
+                        }
+                    }
+                }
+                names.extend(ICON_CHOICES.iter().map(|n| n.to_string()));
+                let mut seen = HashSet::new();
+                names.retain(|n| seen.insert(n.clone()));
+                egui::Grid::new("icon-grid").spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+                    let mut col = 0;
+                    for n in names {
+                        let Some(img) = self.icons.image(std::slice::from_ref(&n)) else { continue };
+                        let b = egui::Button::image(img.fit_to_exact_size(Vec2::splat(24.0)))
+                            .selected(s.icon.as_deref() == Some(n.as_str()));
+                        if ui.add(b).on_hover_text(&n).clicked() {
+                            let gid = gid.clone();
+                            self.edit_profile(|p| p.current_mut().entry(gid).or_default().icon = Some(n));
+                            ui.close();
+                        }
+                        col += 1;
+                        if col % 6 == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+            });
+        });
+        let has_any = !s.targets.is_empty() || s.label.is_some() || s.color.is_some() || s.icon.is_some();
+        if ui.add_enabled(has_any, egui::Button::new(format!("{}  Clear strip", icon::ERASER))).clicked() {
+            let gid = gid.clone();
+            self.edit_profile(|p| {
+                if let Some(a) = p.current_mut().get_mut(&gid) {
+                    a.targets.clear();
+                    a.label = None;
+                    a.color = None;
+                    a.icon = None;
+                }
+            });
+            self.rename = None;
+            ui.close();
+        }
+        ui.separator();
     }
 
     pub(super) fn add_target(&self, gid: &str, t: Target) {
@@ -799,6 +915,38 @@ pub(super) fn target_glyph(t: &Target) -> &'static str {
 
 /// "47%", "MUTE", or the volume in amber with an arrow while the hardware
 /// control waits to pick it up.
+/// Generic icons offered for strips, besides the running apps' own.
+const ICON_CHOICES: &[&str] = &[
+    "audio-headphones",
+    "audio-speakers",
+    "audio-card",
+    "audio-input-microphone",
+    "multimedia-player",
+    "applications-multimedia",
+    "applications-games",
+    "internet-web-browser",
+    "internet-chat",
+    "video-display",
+    "media-optical-audio",
+    "preferences-desktop-notification",
+];
+
+/// Channel number, plus the strip's name when it has one.
+fn strip_header(painter: &egui::Painter, rect: egui::Rect, no: u32, label: Option<&str>) {
+    let Some(label) = label else {
+        painter.text(rect.center(), egui::Align2::CENTER_CENTER, no.to_string(), semibold(15.0), pal().text_dim);
+        return;
+    };
+    let num = painter.layout_no_wrap(no.to_string(), semibold(12.0), pal().text_faint);
+    let mut job = egui::text::LayoutJob::simple_singleline(label.to_string(), semibold(14.0), pal().text);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - num.size().x - 6.0);
+    let name = painter.layout_job(job);
+    let total = num.size().x + 6.0 + name.size().x;
+    let x = rect.center().x - total / 2.0;
+    painter.galley(egui::pos2(x, rect.center().y - num.size().y / 2.0), num.clone(), pal().text_faint);
+    painter.galley(egui::pos2(x + num.size().x + 6.0, rect.center().y - name.size().y / 2.0), name, pal().text);
+}
+
 fn readout(ui: &mut egui::Ui, s: &StripView, size: f32) {
     match s.pickup {
         Some(hw) if !s.muted => {

@@ -82,6 +82,10 @@ pub struct StripView {
     pub icon_hint: Vec<String>,
     /// Where the hardware fader is while it waits to pick up the volume.
     pub pickup: Option<f32>,
+    /// User-set name, colour (index) and icon for the strip.
+    pub label: Option<String>,
+    pub color: Option<u8>,
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1147,6 +1151,7 @@ impl Engine {
 
         for (gid, g) in &profile.groups {
             let (targets, max) = self.group_settings(&profile, gid);
+            let settings = profile.current().get(gid);
             let res = self.resolve(&profile, &targets);
             let position = match res.first() {
                 Some(r) => mapping::inverse_curve(r.volume / (max * boost), curve),
@@ -1212,6 +1217,9 @@ impl Engine {
                     }),
                 icon_hint: res.first().map(|r| r.hints.clone()).unwrap_or_default(),
                 pickup: self.waiting.get(gid).copied().filter(|p| (p - position).abs() > 0.03),
+                label: settings.and_then(|a| a.label.clone()),
+                color: settings.and_then(|a| a.color),
+                icon: settings.and_then(|a| a.icon.clone()),
             });
         }
         // LEDs of buttons whose action has a state.

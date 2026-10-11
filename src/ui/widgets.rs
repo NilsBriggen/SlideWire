@@ -297,7 +297,14 @@ pub fn bar_meter(ui: &mut Ui, level: f32, size: Vec2) -> Response {
 
 /// Scribble-strip style display with optional icon; long text is cut with
 /// "…" and scrolls while hovered.
-pub fn lcd(ui: &mut Ui, size: Vec2, icon: Option<egui::Image<'_>>, text: &str, dim: bool) -> Response {
+pub fn lcd(
+    ui: &mut Ui,
+    size: Vec2,
+    icon: Option<egui::Image<'_>>,
+    text: &str,
+    dim: bool,
+    tint: Option<Color32>,
+) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, LCD_BG);
@@ -315,7 +322,8 @@ pub fn lcd(ui: &mut Ui, size: Vec2, icon: Option<egui::Image<'_>>, text: &str, d
         img.tint(if dim { Color32::from_white_alpha(90) } else { Color32::WHITE }).paint_at(ui, r);
         text_rect.min.x = r.right() + 5.0;
     }
-    let color = if dim { LCD_DIM } else { LCD_TEXT };
+    let lit = tint.map_or(LCD_TEXT, |t| theme::mix(t, Color32::WHITE, 0.25));
+    let color = if dim { theme::mix(lit, LCD_BG, 0.6) } else { lit };
     let font = mono(12.0);
     let galley = painter.layout_no_wrap(text.to_string(), font.clone(), color);
     let clip = painter.with_clip_rect(text_rect);

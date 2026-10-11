@@ -60,9 +60,9 @@ p["input"] = p["output"] = "FakeNano"
 ids = {g["name"]: gid for gid, g in p["groups"].items()}
 tone = {"type": "app", "m": {"pattern": "testtone"}, "label": "Test tone"}
 p["assignments"] = {
-    ids["Fader 1"]: {"targets": [tone]},
+    ids["Fader 1"]: {"targets": [tone], "label": "Music", "color": 3},
     ids["Knob 1"]: {"targets": [tone]},
-    ids["Fader 3"]: {"targets": [{"type": "defaultOutput"}]},
+    ids["Fader 3"]: {"targets": [{"type": "defaultOutput"}], "label": "Speakers"},
 }
 # Bank 2: the test tone on fader 2.
 p["banks"] = [{ids["Fader 2"]: {"targets": [tone]}}]
