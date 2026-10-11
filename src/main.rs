@@ -137,6 +137,15 @@ fn main() {
                 }
                 return;
             }
+            // For packaging: PNG icons for the hicolor theme.
+            "--write-icons" => {
+                let dir = args.get(i + 1).map(std::path::PathBuf::from).unwrap_or_else(|| ".".into());
+                if let Err(e) = icon::write_theme_icons(&dir) {
+                    eprintln!("{e:#}");
+                    std::process::exit(1);
+                }
+                return;
+            }
             "--minimized" => minimized = true,
             other => {
                 eprintln!("unknown option {other}\n\n{HELP}");

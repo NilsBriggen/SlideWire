@@ -401,7 +401,8 @@ pub fn lcd(
     }
     let lit = tint.map_or(LCD_TEXT, |t| theme::mix(t, Color32::WHITE, 0.25));
     let color = if dim { theme::mix(lit, LCD_BG, 0.6) } else { lit };
-    let font = mono(12.0);
+    // Narrow strips fit a few more letters with a smaller font.
+    let font = mono(if rect.width() < 84.0 { 10.5 } else { 12.0 });
     let galley = painter.layout_no_wrap(text.to_string(), font.clone(), color);
     let clip = painter.with_clip_rect(text_rect);
     let y = text_rect.center().y - galley.size().y / 2.0;

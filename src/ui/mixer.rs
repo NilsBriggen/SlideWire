@@ -1456,19 +1456,24 @@ const ICON_CHOICES: &[&str] = &[
 ];
 
 /// Channel number, plus the strip's name when it has one.
+/// The channel number in a small badge, then the strip's name if it has one.
 fn strip_header(painter: &egui::Painter, rect: egui::Rect, no: u32, label: Option<&str>) {
-    let Some(label) = label else {
-        painter.text(rect.center(), egui::Align2::CENTER_CENTER, no.to_string(), semibold(15.0), pal().text_dim);
-        return;
-    };
-    let num = painter.layout_no_wrap(no.to_string(), semibold(12.0), pal().text_faint);
-    let mut job = egui::text::LayoutJob::simple_singleline(label.to_string(), semibold(14.0), pal().text);
-    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - num.size().x - 6.0);
-    let name = painter.layout_job(job);
-    let total = num.size().x + 6.0 + name.size().x;
+    let num = painter.layout_no_wrap(no.to_string(), mono(11.5), pal().text_dim);
+    let badge = vec2((num.size().x + 10.0).max(20.0), 18.0);
+    let name = label.map(|label| {
+        let mut job = egui::text::LayoutJob::simple_singleline(label.to_string(), semibold(14.0), pal().text);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - badge.x - 12.0);
+        painter.layout_job(job)
+    });
+    let total = badge.x + name.as_ref().map_or(0.0, |n| 6.0 + n.size().x);
     let x = rect.center().x - total / 2.0;
-    painter.galley(egui::pos2(x, rect.center().y - num.size().y / 2.0), num.clone(), pal().text_faint);
-    painter.galley(egui::pos2(x + num.size().x + 6.0, rect.center().y - name.size().y / 2.0), name, pal().text);
+    let b = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - badge.y / 2.0), badge);
+    painter.rect_filled(b, 5.0, pal().inset);
+    painter.rect_stroke(b, 5.0, Stroke::new(1.0, pal().border_strong), StrokeKind::Inside);
+    painter.galley(b.center() - num.size() / 2.0, num, pal().text_dim);
+    if let Some(name) = name {
+        painter.galley(egui::pos2(b.right() + 6.0, rect.center().y - name.size().y / 2.0), name, pal().text);
+    }
 }
 
 fn readout(ui: &mut egui::Ui, s: &StripView, size: f32) {

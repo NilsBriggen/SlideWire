@@ -110,6 +110,9 @@ pub struct App {
     new_bus: String,
     /// The zoom factor last applied from settings.
     zoom: f32,
+    /// The page on screen and since when (it fades in).
+    shown_tab: Tab,
+    tab_since: Instant,
     log_filter: String,
     log_warnings_only: bool,
     confirm: Option<Confirm>,
@@ -178,6 +181,8 @@ impl App {
             new_bus: String::new(),
             welcome_other: None,
             zoom: 0.0,
+            shown_tab: Tab::Mixer,
+            tab_since: Instant::now(),
             log_filter: String::new(),
             log_warnings_only: false,
             led_test: None,
@@ -284,6 +289,17 @@ impl App {
             });
         if stop {
             self.shared.lock().unwrap().learn = None;
+        }
+    }
+
+    fn page(&mut self, ui: &mut egui::Ui) {
+        match self.tab {
+            Tab::Mixer => self.mixer(ui),
+            Tab::Controller => self.controller(ui),
+            Tab::Buttons => self.buttons(ui),
+            Tab::Profiles => self.profiles(ui),
+            Tab::Settings => self.settings(ui),
+            Tab::Log => self.log(ui),
         }
     }
 
@@ -860,15 +876,20 @@ impl eframe::App for App {
                 .show(ui, |ui| self.sources(ui));
         }
 
+        // A new page fades in quickly.
+        if self.tab != self.shown_tab {
+            self.shown_tab = self.tab;
+            self.tab_since = Instant::now();
+        }
+        let fade = if theme::reduce_motion() { 1.0 } else { (self.tab_since.elapsed().as_secs_f32() / 0.12).min(1.0) };
+        if fade < 1.0 {
+            ctx.request_repaint();
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(pal().panel).inner_margin(egui::Margin::same(16)))
-            .show(ui, |ui| match self.tab {
-                Tab::Mixer => self.mixer(ui),
-                Tab::Controller => self.controller(ui),
-                Tab::Buttons => self.buttons(ui),
-                Tab::Profiles => self.profiles(ui),
-                Tab::Settings => self.settings(ui),
-                Tab::Log => self.log(ui),
+            .show(ui, |ui| {
+                ui.multiply_opacity(egui::emath::easing::cubic_out(fade));
+                self.page(ui)
             });
         self.doctor_window(&ctx);
         self.confirm_dialog(&ctx);

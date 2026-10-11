@@ -400,9 +400,7 @@ fn data_dir() -> Result<PathBuf> {
 /// Add a menu entry and the icon for this user (for builds without a package).
 pub fn install_desktop_files() -> Result<PathBuf> {
     let data = data_dir()?;
-    let icon_dir = data.join("icons/hicolor/scalable/apps");
-    std::fs::create_dir_all(&icon_dir)?;
-    std::fs::write(icon_dir.join(format!("{}.svg", crate::APP_ID)), crate::icon::svg())?;
+    crate::icon::write_theme_icons(&data.join("icons"))?;
     let apps = data.join("applications");
     std::fs::create_dir_all(&apps)?;
     let entry = apps.join(format!("{}.desktop", crate::APP_ID));
@@ -421,6 +419,9 @@ pub fn uninstall() -> Result<Vec<String>> {
         data.join("applications/slidewire.desktop"),
         data.join("icons/hicolor/scalable/apps/slidewire.svg"),
     ];
+    for size in crate::icon::PNG_SIZES {
+        files.push(data.join(format!("icons/hicolor/{size}x{size}/apps/{}.png", crate::APP_ID)));
+    }
     if let Some(p) = autostart_path() {
         files.push(p.with_file_name("slidewire.desktop"));
         files.push(p);

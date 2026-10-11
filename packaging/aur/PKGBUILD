@@ -50,7 +50,7 @@ package() {
   cd "$_pkgname"
   install -Dm755 target/release/slidewire "$pkgdir/usr/bin/slidewire"
   install -Dm644 packaging/dev.briggen.Slidewire.desktop "$pkgdir/usr/share/applications/dev.briggen.Slidewire.desktop"
-  install -Dm644 assets/slidewire.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.briggen.Slidewire.svg"
+  target/release/slidewire --write-icons "$pkgdir/usr/share/icons"
   install -Dm644 packaging/slidewire.service "$pkgdir/usr/lib/systemd/user/slidewire.service"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
 }

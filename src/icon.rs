@@ -4,6 +4,8 @@
 /// RGBA pixels of a `size`×`size` icon.
 pub fn rgba(size: u32) -> Vec<u8> {
     let s = size as f32;
+    // Small sizes: no glow, a thicker wire and bigger caps, so it stays crisp.
+    let small = size <= 32;
     let mut px = vec![0u8; (size * size * 4) as usize];
     let radius = s * 0.22;
     let slots = [0.28f32, 0.5, 0.72];
@@ -33,8 +35,9 @@ pub fn rgba(size: u32) -> Vec<u8> {
             pts.extend(slots.iter().zip(caps).map(|(x, y)| (x * s, y * s)));
             pts.push((0.92 * s, caps[2] * s));
             let d = pts.windows(2).map(|w| seg_dist((fx, fy), w[0], w[1])).fold(f32::MAX, f32::min);
-            let wire = (s * 0.022 + 0.5 - d).clamp(0.0, 1.0);
-            let glow = (1.0 - d / (s * 0.09)).clamp(0.0, 1.0).powi(2) * 0.35;
+            let half_width = if small { s * 0.035 } else { s * 0.022 };
+            let wire = (half_width + 0.5 - d).clamp(0.0, 1.0);
+            let glow = if small { 0.0 } else { (1.0 - d / (s * 0.09)).clamp(0.0, 1.0).powi(2) * 0.35 };
             let k = wire.max(glow);
             for (ch, w) in c.iter_mut().zip([110.0, 230.0, 255.0]) {
                 *ch = lerp(*ch, w, k);
@@ -43,7 +46,8 @@ pub fn rgba(size: u32) -> Vec<u8> {
                 let cx = sx * s;
                 // Cap.
                 let cy = caps[i] * s;
-                if (fx - cx).abs() < s * 0.09 && (fy - cy).abs() < s * 0.055 {
+                let (w, h) = if small { (0.11, 0.075) } else { (0.09, 0.055) };
+                if (fx - cx).abs() < s * w && (fy - cy).abs() < s * h {
                     c = if i == 1 { [255.0, 140.0, 66.0] } else { [92.0, 200.0, 255.0] };
                 }
             }
@@ -65,6 +69,29 @@ fn seg_dist(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
+}
+
+/// Sizes for the hicolor icon theme.
+pub const PNG_SIZES: [u32; 7] = [16, 22, 24, 32, 48, 64, 256];
+
+/// The icon as a PNG file.
+pub fn png(size: u32) -> Vec<u8> {
+    let img = image::RgbaImage::from_raw(size, size, rgba(size)).expect("icon buffer size");
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).expect("encode icon");
+    out.into_inner()
+}
+
+/// Write `hicolor/<size>x<size>/apps/<id>.png` (and the SVG) under `dir`.
+pub fn write_theme_icons(dir: &std::path::Path) -> std::io::Result<()> {
+    for size in PNG_SIZES {
+        let d = dir.join(format!("hicolor/{size}x{size}/apps"));
+        std::fs::create_dir_all(&d)?;
+        std::fs::write(d.join(format!("{}.png", crate::APP_ID)), png(size))?;
+    }
+    let d = dir.join("hicolor/scalable/apps");
+    std::fs::create_dir_all(&d)?;
+    std::fs::write(d.join(format!("{}.svg", crate::APP_ID)), svg())
 }
 
 pub fn window_icon() -> eframe::egui::IconData {
