@@ -1,0 +1,26 @@
+[package]
+name = "slidewire"
+version = "0.1.0"
+edition = "2024"
+description = "Control app and device volumes with a MIDI controller"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.104"
+crossbeam-channel = "0.5.17"
+directories = "6.0.0"
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "wayland", "x11", "default_fonts", "accesskit"] }
+egui-phosphor = "0.14.0"
+egui_extras = { version = "0.36.2", features = ["svg", "image", "file"] }
+freedesktop-icons = "0.4.0"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+indexmap = { version = "2.14.2", features = ["serde"] }
+ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }
+libc = "0.2.190"
+libpulse-binding = "2.30.1"
+midir = "0.11.1"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
+ulid = "3.0.0"
+zbus = { version = "5.19.0", default-features = false, features = ["blocking-api", "async-io"] }
