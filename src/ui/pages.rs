@@ -265,70 +265,66 @@ impl App {
         let before = serde_json::to_string(&s).unwrap_or_default();
         ui.label(RichText::new("Settings").font(semibold(17.0)));
         ui.add_space(8.0);
+        let wide = ui.available_width() > 1000.0;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.set_max_width(760.0);
-            widgets::card(ui, icon::GEAR_SIX, "General", |ui| {
-                let mut autostart = config::autostart_enabled();
-                if widgets::toggle(ui, &mut autostart, "Start when I log in").changed()
-                    && let Err(e) = config::set_autostart(autostart)
-                {
-                    self.flash(format!("Autostart: {e:#}"));
-                }
-                widgets::toggle(ui, &mut s.start_minimized, "Start minimised to the tray");
-                widgets::toggle(
-                    ui,
-                    &mut s.auto_switch,
-                    "Switch to the matching profile when a controller is plugged in",
-                );
-                widgets::toggle(ui, &mut s.osd, "Show the Plasma volume pop-up when a fader moves");
-            });
-            ui.add_space(10.0);
-            widgets::card(ui, icon::SPEAKER_HIGH, "Volume", |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Curve");
-                    ui.spacing_mut().slider_width = 260.0;
-                    ui.add(egui::Slider::new(&mut s.curve, 0.5..=3.0).step_by(0.1));
+            if wide {
+                ui.columns(2, |cols| {
+                    self.general_card(&mut cols[0], &mut s);
+                    cols[0].add_space(10.0);
+                    volume_card(&mut cols[0], &mut s);
+                    midi_card(&mut cols[1], &mut s, &ports_out);
+                    cols[1].add_space(10.0);
+                    nano_card(&mut cols[1]);
+                    cols[1].add_space(10.0);
+                    self.about_card(&mut cols[1]);
                 });
-                widgets::hint(
-                    ui,
-                    "1.0 = same scale as the system volume slider. Higher values give finer control at low volume.",
-                );
-                ui.horizontal(|ui| {
-                    ui.label("Encoder clicks from 0 to 100%");
-                    ui.add(egui::DragValue::new(&mut s.default_steps).range(5..=400));
-                });
-                widgets::toggle(ui, &mut s.allow_boost, "Allow boosting above 100% (up to 150%)");
-                widgets::toggle(ui, &mut s.pickup, "Pick up: a fader only takes over once it reaches the volume");
-                widgets::hint(
-                    ui,
-                    "Stops jumps when a volume was changed elsewhere. The mixer shows where your fader is in amber.",
-                );
-            });
-            ui.add_space(10.0);
-            widgets::card(ui, icon::PLUGS_CONNECTED, "MIDI", |ui| {
-                widgets::toggle(
-                    ui,
-                    &mut s.led_heartbeat,
-                    "LED heartbeat: resend LED states every 5 s, for devices that forget them",
-                );
-                ui.horizontal(|ui| {
-                    ui.label("Forward all MIDI input to");
-                    port_combo(ui, "passthru", &mut s.passthru, &ports_out);
-                });
-            });
-            ui.add_space(10.0);
-            widgets::card(ui, icon::INFO, "Korg nanoKONTROL2", |ui| {
-                ui.label(
-                    "The nanoKONTROL2 only lets the computer control its button LEDs in \"External\" LED mode. \
-                     Set LED Mode to External once with the Korg KONTROL Editor (it runs under Wine) and write \
-                     it to the device; otherwise the buttons still work but their LEDs only light while pressed.",
-                );
-            });
+            } else {
+                ui.set_max_width(760.0);
+                self.general_card(ui, &mut s);
+                ui.add_space(10.0);
+                volume_card(ui, &mut s);
+                ui.add_space(10.0);
+                midi_card(ui, &mut s, &ports_out);
+                ui.add_space(10.0);
+                nano_card(ui);
+                ui.add_space(10.0);
+                self.about_card(ui);
+            }
         });
         if serde_json::to_string(&s).unwrap_or_default() != before {
             self.shared.lock().unwrap().store.settings = s;
             self.send(UiCmd::ProfileEdited);
         }
+    }
+
+    fn general_card(&mut self, ui: &mut egui::Ui, s: &mut Settings) {
+        widgets::card(ui, icon::GEAR_SIX, "General", |ui| {
+            let mut autostart = config::autostart_enabled();
+            if widgets::toggle(ui, &mut autostart, "Start when I log in").changed()
+                && let Err(e) = config::set_autostart(autostart)
+            {
+                self.flash(format!("Autostart: {e:#}"));
+            }
+            widgets::toggle(ui, &mut s.start_minimized, "Start minimised to the tray");
+            widgets::toggle(ui, &mut s.auto_switch, "Switch to the matching profile when a controller is plugged in");
+            widgets::toggle(ui, &mut s.osd, "Show the Plasma volume pop-up when a fader moves");
+        });
+    }
+
+    fn about_card(&mut self, ui: &mut egui::Ui) {
+        widgets::card(ui, icon::INFO, "About", |ui| {
+            ui.label(format!("Slidewire {}", env!("CARGO_PKG_VERSION")));
+            let dir = self.shared.lock().unwrap().store.dir.clone();
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(dir.display().to_string()).font(mono(12.0)).color(TEXT_DIM));
+                if ui.small_button(format!("{}  Open", icon::FOLDER_OPEN)).clicked()
+                    && let Err(e) = std::process::Command::new("xdg-open").arg(&dir).spawn()
+                {
+                    self.flash(format!("Couldn't open the folder: {e}"));
+                }
+            });
+            widgets::hint(ui, "Settings and profiles are plain JSON files in this folder.");
+        });
     }
 
     pub(super) fn log(&mut self, ui: &mut egui::Ui) {
@@ -471,4 +467,49 @@ fn device_checklist(ui: &mut egui::Ui, names: &mut Vec<String>, devices: &[crate
             widgets::hint(ui, &format!("{n} (not connected)"));
         }
     }
+}
+
+fn volume_card(ui: &mut egui::Ui, s: &mut Settings) {
+    widgets::card(ui, icon::SPEAKER_HIGH, "Volume", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Curve");
+            ui.spacing_mut().slider_width = 220.0;
+            ui.add(egui::Slider::new(&mut s.curve, 0.5..=3.0).step_by(0.1));
+        });
+        widgets::hint(
+            ui,
+            "1.0 = same scale as the system volume slider. Higher values give finer control at low volume.",
+        );
+        ui.horizontal(|ui| {
+            ui.label("Encoder clicks from 0 to 100%");
+            ui.add(egui::DragValue::new(&mut s.default_steps).range(5..=400));
+        });
+        widgets::toggle(ui, &mut s.allow_boost, "Allow boosting above 100% (up to 150%)");
+        widgets::toggle(ui, &mut s.pickup, "Pick up: a fader only takes over once it reaches the volume");
+        widgets::hint(
+            ui,
+            "Stops jumps when a volume was changed elsewhere. The mixer shows where your fader is in amber.",
+        );
+    });
+}
+
+fn midi_card(ui: &mut egui::Ui, s: &mut Settings, ports_out: &[String]) {
+    widgets::card(ui, icon::PLUGS_CONNECTED, "MIDI", |ui| {
+        widgets::toggle(ui, &mut s.led_heartbeat, "LED heartbeat: resend LED states every 5 s");
+        widgets::hint(ui, "For devices that forget their LEDs.");
+        ui.horizontal(|ui| {
+            ui.label("Forward all MIDI input to");
+            port_combo(ui, "passthru", &mut s.passthru, ports_out);
+        });
+    });
+}
+
+fn nano_card(ui: &mut egui::Ui) {
+    widgets::card(ui, icon::LIGHTBULB, "nanoKONTROL2 LEDs", |ui| {
+        ui.label(
+            "The nanoKONTROL2 only lets the computer control its button LEDs in \"External\" LED mode. \
+             Set LED Mode to External once with the Korg KONTROL Editor (it runs under Wine) and write \
+             it to the device; otherwise the buttons still work but their LEDs only light while pressed.",
+        );
+    });
 }
