@@ -115,6 +115,10 @@ pub struct Store {
     pub warnings: Vec<String>,
     /// There were no settings yet: show the welcome.
     pub first_run: bool,
+    /// Changed since the last save: profile ids, settings, and when.
+    dirty_profiles: std::collections::HashSet<String>,
+    dirty_settings: bool,
+    touched: Option<std::time::Instant>,
 }
 
 impl Store {
@@ -188,7 +192,16 @@ impl Store {
                 }
             }
         }
-        let mut store = Store { dir, settings, profiles, warnings, first_run };
+        let mut store = Store {
+            dir,
+            settings,
+            profiles,
+            warnings,
+            first_run,
+            dirty_profiles: Default::default(),
+            dirty_settings: false,
+            touched: None,
+        };
         if store.profiles.is_empty() {
             let id = crate::profile::new_id();
             let mut p = Profile::nanokontrol2();
@@ -204,6 +217,48 @@ impl Store {
             let _ = store.save_settings();
         }
         store
+    }
+
+    /// Mark a profile as changed; it is saved shortly (see [`Store::save_due`]).
+    pub fn touch(&mut self, id: &str) {
+        self.dirty_profiles.insert(id.to_string());
+        self.touched = Some(std::time::Instant::now());
+    }
+
+    pub fn touch_settings(&mut self) {
+        self.dirty_settings = true;
+        self.touched = Some(std::time::Instant::now());
+    }
+
+    /// Unsaved changes, and nothing changed for a moment: time to save.
+    /// Saving waits for a pause so dragging a slider doesn't write the
+    /// files on every frame.
+    pub fn save_due(&self) -> bool {
+        self.touched.is_some_and(|t| t.elapsed() >= std::time::Duration::from_millis(500))
+    }
+
+    pub fn has_unsaved(&self) -> bool {
+        self.touched.is_some()
+    }
+
+    /// Write everything changed. Returns what couldn't be saved.
+    pub fn save_now(&mut self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if std::mem::take(&mut self.dirty_settings)
+            && let Err(e) = self.save_settings()
+        {
+            errors.push(format!("Couldn't save settings: {e:#}"));
+        }
+        for id in std::mem::take(&mut self.dirty_profiles) {
+            // Deleted in the meantime: nothing to save.
+            if self.profiles.contains_key(&id)
+                && let Err(e) = self.save_profile(&id)
+            {
+                errors.push(format!("Couldn't save profile \"{}\": {e:#}", self.profiles[&id].name));
+            }
+        }
+        self.touched = None;
+        errors
     }
 
     pub fn save_settings(&self) -> Result<()> {

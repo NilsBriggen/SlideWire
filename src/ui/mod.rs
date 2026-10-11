@@ -225,7 +225,7 @@ impl App {
         };
         let mut sh = self.shared.lock().unwrap();
         sh.store.profiles.insert(id.clone(), p);
-        let _ = sh.store.save_profile(&id);
+        sh.store.touch(&id);
         drop(sh);
         self.send(UiCmd::ProfileEdited);
         self.toast(icon::ARROW_COUNTER_CLOCKWISE, if redo { "Redone" } else { "Undone" }, None, None);
@@ -642,7 +642,7 @@ impl App {
             ConfirmAction::DeleteProfile(id) => {
                 let mut sh = self.shared.lock().unwrap();
                 sh.store.delete_profile(&id);
-                let _ = sh.store.save_settings();
+                sh.store.touch_settings();
                 drop(sh);
                 self.send(UiCmd::ProfileEdited);
             }

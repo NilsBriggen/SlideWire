@@ -109,7 +109,7 @@ impl App {
                     let mut sh = self.shared.lock().unwrap();
                     if let Some(p) = sh.store.profiles.get_mut(id) {
                         p.name = new;
-                        let _ = sh.store.save_profile(id);
+                        sh.store.touch(id);
                     }
                     drop(sh);
                     self.send(UiCmd::ProfileEdited);
@@ -251,7 +251,7 @@ impl App {
                     p.name = format!("{} (copy)", p.name);
                     let id = crate::profile::new_id();
                     sh.store.profiles.insert(id.clone(), p);
-                    let _ = sh.store.save_profile(&id);
+                    sh.store.touch(&id);
                 }
             }
             "export" => {
@@ -279,7 +279,7 @@ impl App {
                 };
                 let id = crate::profile::new_id();
                 sh.store.profiles.insert(id.clone(), p);
-                let _ = sh.store.save_profile(&id);
+                sh.store.touch(&id);
                 drop(sh);
                 self.send(UiCmd::ActivateProfile(id));
                 if what == "new" {

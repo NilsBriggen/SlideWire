@@ -54,6 +54,9 @@ pub enum UiCmd {
     ToggleMicMute,
     /// Change the default output's volume by this much (tray scroll wheel).
     NudgeOutput(f32),
+    /// The app is quitting: put ducked volumes back, turn the LEDs off,
+    /// save, then answer.
+    Shutdown(Sender<()>),
 }
 
 pub enum Event {
@@ -127,7 +130,8 @@ pub struct LearnRequest {
 
 pub struct Shared {
     pub store: Store,
-    pub audio: AudioState,
+    /// Shared, not copied: the engine reads it for every MIDI message.
+    pub audio: Arc<AudioState>,
     pub focus: FocusInfo,
     pub ports_in: Vec<String>,
     pub ports_out: Vec<String>,
@@ -255,6 +259,11 @@ pub struct Engine {
     duck_tick: Instant,
     duck_base: HashMap<u32, f32>,
     show_window: Sender<()>,
+    /// Active profile, ports and passthru last connected for: a profile
+    /// edit only rescans the ports when one of them changed.
+    port_key: Option<(Option<String>, String, String, String)>,
+    /// The last save error shown, so a full disk doesn't repeat it.
+    save_error: Option<String>,
 }
 
 impl Engine {
@@ -291,6 +300,8 @@ impl Engine {
             duck_tick: Instant::now(),
             duck_base: HashMap::new(),
             show_window,
+            port_key: None,
+            save_error: None,
         }
     }
 
@@ -303,11 +314,28 @@ impl Engine {
         let mut last_heartbeat = Instant::now();
         let mut last_meter = Instant::now();
         loop {
-            match self.rx.recv_timeout(Duration::from_millis(40)) {
+            // Meters, ducking and pending work need a quick tick; otherwise
+            // wake only for the periodic port scan.
+            let busy = !self.meters_wanted.is_empty()
+                || !self.duck_base.is_empty()
+                || self.rescan_at.is_some()
+                || self.shared.lock().unwrap().store.has_unsaved();
+            let tick = Duration::from_millis(if busy { 40 } else { 500 });
+            match self.rx.recv_timeout(tick) {
+                Ok(Event::Ui(UiCmd::Shutdown(done))) => {
+                    self.shutdown();
+                    let _ = done.send(());
+                    return;
+                }
                 Ok(ev) => {
                     self.handle(ev);
                     // Drain bursts (fader sweeps) before doing feedback work.
                     while let Ok(ev) = self.rx.try_recv() {
+                        if let Event::Ui(UiCmd::Shutdown(done)) = ev {
+                            self.shutdown();
+                            let _ = done.send(());
+                            return;
+                        }
                         self.handle(ev);
                     }
                     self.feedback();
@@ -315,6 +343,7 @@ impl Engine {
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
                 Err(_) => return,
             }
+            self.save_if_due(false);
             let now = Instant::now();
             // The sequencer port shows up a moment after the device node, so
             // scan again shortly after a hotplug event.
@@ -344,7 +373,21 @@ impl Engine {
             Event::Midi(bytes) => self.on_midi(&bytes),
             Event::Audio(st) => {
                 let mut sh = self.shared.lock().unwrap();
-                sh.audio = st;
+                if st.connected != sh.audio.connected {
+                    // A (re)started server numbers its streams anew: what we
+                    // remember by stream number is meaningless now.
+                    self.duck_base.clear();
+                    self.ducker = mapping::Ducker::default();
+                    self.focus_cache.clear();
+                    self.waiting.clear();
+                    self.meters_wanted.clear();
+                    if st.connected {
+                        sh.log("Connected to the sound server");
+                    } else {
+                        sh.warn("Lost the sound server; reconnecting");
+                    }
+                }
+                sh.audio = Arc::new(st);
             }
             Event::Focus(f) => {
                 self.focus_cache.clear();
@@ -387,7 +430,7 @@ impl Engine {
                 if let Some(id) = candidate {
                     let name = sh.store.profiles[&id].name.clone();
                     sh.store.settings.active_profile = Some(id);
-                    let _ = sh.store.save_settings();
+                    sh.store.touch_settings();
                     sh.log(format!("Switched to profile \"{name}\" (device connected)"));
                     sh.notify(Notice::ProfileSwitched(name));
                 }
@@ -510,7 +553,7 @@ impl Engine {
                     c.max_value = None;
                 }
                 sh.learn = None;
-                let _ = sh.store.save_profile(&id);
+                sh.store.touch(&id);
                 sh.log(format!("Learned {}", msg.describe()));
             }
             sh.repaint();
@@ -708,7 +751,7 @@ impl Engine {
             }
             None => p.step_bank(step),
         };
-        let _ = sh.store.save_profile(&id);
+        sh.store.touch(&id);
         let osd = sh.store.settings.osd;
         sh.log(format!("Bank {}", new + 1));
         if step != 0 {
@@ -772,7 +815,7 @@ impl Engine {
         let mut sh = self.shared.lock().unwrap();
         let Some(id) = sh.active_id() else { return };
         sh.store.profiles.get_mut(&id).unwrap().scenes.insert(name.to_string(), scene);
-        let _ = sh.store.save_profile(&id);
+        sh.store.touch(&id);
         sh.log(format!("Saved scene \"{name}\""));
     }
 
@@ -847,7 +890,7 @@ impl Engine {
             return;
         }
         sh.store.settings.active_profile = Some(id.to_string());
-        let _ = sh.store.save_settings();
+        sh.store.touch_settings();
         drop(sh);
         self.positions.clear();
         self.hw_pos.clear();
@@ -886,16 +929,27 @@ impl Engine {
             }
             UiCmd::SetDefault(kind, name) => self.audio.send(AudioCmd::SetDefault(kind, name)),
             UiCmd::ProfileEdited => {
-                let sh = self.shared.lock().unwrap();
+                let mut sh = self.shared.lock().unwrap();
                 if let Some(id) = sh.active_id() {
-                    let _ = sh.store.save_profile(&id);
+                    sh.store.touch(&id);
                 }
-                let _ = sh.store.save_settings();
+                sh.store.touch_settings();
+                let key = Some((
+                    sh.active_id(),
+                    sh.active().map(|p| p.input.clone()).unwrap_or_default(),
+                    sh.active().map(|p| p.output.clone()).unwrap_or_default(),
+                    sh.store.settings.passthru.clone(),
+                ));
                 drop(sh);
                 self.sent.clear();
                 self.regexes.clear();
-                self.scan_ports();
+                if key != self.port_key {
+                    self.port_key = key;
+                    self.scan_ports();
+                }
             }
+            // Handled in the run loop.
+            UiCmd::Shutdown(_) => {}
             UiCmd::ActivateProfile(id) => self.activate_profile(&id),
             UiCmd::SendTest(cid) => {
                 if let Some(c) = profile.as_ref().and_then(|p| p.controls.get(&cid)).cloned() {
@@ -959,6 +1013,49 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// Write unsaved changes once editing paused (or now, when quitting).
+    fn save_if_due(&mut self, now: bool) {
+        let mut sh = self.shared.lock().unwrap();
+        if !(sh.store.has_unsaved() && (now || sh.store.save_due())) {
+            return;
+        }
+        let errors = sh.store.save_now();
+        match errors.first() {
+            Some(e) if self.save_error.as_ref() != Some(e) => {
+                self.save_error = Some(e.clone());
+                for e in &errors {
+                    sh.warn(e.clone());
+                }
+                sh.notify(Notice::Problem(e.clone()));
+            }
+            Some(_) => {}
+            None => self.save_error = None,
+        }
+    }
+
+    /// Leave things as the user set them: undo ducking, turn the LEDs off
+    /// and save.
+    fn shutdown(&mut self) {
+        for (index, base) in std::mem::take(&mut self.duck_base) {
+            self.audio.send(AudioCmd::SetVolume(Kind::SinkInput, index, base));
+        }
+        let profile = self.shared.lock().unwrap().active().cloned();
+        if let Some(profile) = profile {
+            let lit = profile
+                .groups
+                .values()
+                .flat_map(|g| g.mute_indicators.iter().chain(&g.assign_indicators).chain(&g.run_indicators))
+                .chain(profile.buttons.keys());
+            let msgs: Vec<Vec<u8>> =
+                lit.filter_map(|cid| profile.controls.get(cid)).map(|c| mapping::indicator_message(c, false)).collect();
+            for m in msgs {
+                self.send(m);
+            }
+        }
+        self.save_if_due(true);
+        self.audio.flush(Duration::from_millis(500));
     }
 
     // ------------------------------------------------------- group behaviour
@@ -1093,7 +1190,7 @@ impl Engine {
             Some(t) => entry.targets = vec![t],
             None => entry.targets.clear(),
         }
-        let _ = sh.store.save_profile(&id);
+        sh.store.touch(&id);
         sh.repaint();
     }
 
@@ -1282,7 +1379,7 @@ impl Engine {
     /// relative encoders don't wait for the server round trip.
     fn optimistic(&mut self, kind: Kind, index: u32, vol: Option<f32>, mute: Option<bool>) {
         let mut sh = self.shared.lock().unwrap();
-        let a = &mut sh.audio;
+        let a = Arc::make_mut(&mut sh.audio);
         let apply_dev = |d: &mut crate::audio::Device| {
             if let Some(v) = vol {
                 d.volume = v;

@@ -25,6 +25,9 @@ use std::time::Duration;
 
 use engine::{Engine, Event, FocusInfo, Shared};
 
+/// The app's id: D-Bus name, desktop file, icon and window class.
+pub const APP_ID: &str = "dev.briggen.Slidewire";
+
 /// Set when the user chose Quit while the window was open.
 pub static QUIT: AtomicBool = AtomicBool::new(false);
 
@@ -116,6 +119,11 @@ fn main() {
         i += 1;
     }
 
+    install_panic_hook();
+    // Handle SIGTERM/SIGINT/SIGHUP on one thread (blocked everywhere else,
+    // which threads spawned from here inherit).
+    let signals = block_quit_signals();
+
     let (tx, rx) = crossbeam_channel::unbounded::<Event>();
 
     // Single instance: a second launch just raises the running one.
@@ -188,7 +196,24 @@ fn main() {
     }
 
     let engine = Engine::new(shared.clone(), rx, tx.clone(), audio, show_tx);
-    std::thread::Builder::new().name("engine".into()).spawn(move || engine.run()).expect("spawn engine");
+    let engine = std::thread::Builder::new().name("engine".into()).spawn(move || engine.run()).expect("spawn engine");
+
+    {
+        // Quit cleanly on logout, `systemctl stop` or Ctrl+C.
+        let (window_tx, shared) = (window_tx.clone(), shared.clone());
+        std::thread::Builder::new()
+            .name("signals".into())
+            .spawn(move || {
+                let mut sig = 0;
+                // SAFETY: waits on the set blocked above; writes only `sig`.
+                if unsafe { libc::sigwait(&signals, &mut sig) } == 0 {
+                    QUIT.store(true, Ordering::SeqCst);
+                    let _ = window_tx.send(WindowCmd::Quit);
+                    shared.lock().unwrap().repaint();
+                }
+            })
+            .expect("spawn signal thread");
+    }
 
     // Test instances stay off the real panel.
     let tray = if test_instance { None } else { tray::spawn(shared.clone(), tx.clone(), window_tx.clone()) };
@@ -219,10 +244,57 @@ fn main() {
         }
     }
 
+    // Let the engine put things back, then go.
+    let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+    let _ = tx.send(Event::Ui(engine::UiCmd::Shutdown(done_tx)));
+    let _ = done_rx.recv_timeout(Duration::from_secs(2));
+    drop(engine);
     if let Some(conn) = bus.as_ref().filter(|_| !test_instance) {
         dbus::uninstall_focus_script(conn);
     }
     std::process::exit(0);
+}
+
+fn block_quit_signals() -> libc::sigset_t {
+    // SAFETY: plain libc calls on a set we own.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            libc::sigaddset(&mut set, sig);
+        }
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        set
+    }
+}
+
+/// A panic on any thread ends the process: half the app dead (say, the
+/// engine) with the window still up is worse. The report is also written to
+/// `~/.local/state/slidewire/crash.log`, and systemd restarts the service.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default(info);
+        if let Some(dir) = directories::BaseDirs::new().and_then(|b| b.state_dir().map(|d| d.join("slidewire"))) {
+            use std::io::Write;
+            let _ = std::fs::create_dir_all(&dir);
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default();
+                let _ = writeln!(
+                    f,
+                    "--- slidewire {} at unix time {secs}\n{info}\n{}",
+                    env!("CARGO_PKG_VERSION"),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
+        }
+        // SAFETY: ends the process at once, without running exit handlers
+        // that could wait on the thread that just died.
+        unsafe { libc::_exit(101) };
+    }));
 }
 
 fn run_window(

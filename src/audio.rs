@@ -16,6 +16,7 @@ use libpulse_binding as pa;
 use pa::callbacks::ListResult;
 use pa::context::subscribe::{Facility, InterestMaskSet};
 use pa::context::{Context, FlagSet as CtxFlags, State as CtxState};
+use pa::mainloop::api::MainloopInnerType;
 use pa::mainloop::standard::{IterateResult, Mainloop};
 use pa::proplist::Proplist;
 use pa::stream::{FlagSet as StreamFlags, PeekResult, Stream};
@@ -137,44 +138,86 @@ pub enum AudioCmd {
     /// Move an app's stream to another device (by name).
     Move(Kind, u32, String),
     SetMeters(HashSet<MeterKey>),
+    /// Answer once everything sent before has gone out to the server.
+    Flush(Sender<()>),
 }
 
 pub type Peaks = Arc<Mutex<HashMap<MeterKey, f32>>>;
+
+/// Interrupts the audio thread's wait in the PulseAudio mainloop, so a
+/// command is handled right away while the thread otherwise sleeps.
+struct Waker(*mut libpulse_sys::pa_mainloop);
+// SAFETY: pa_mainloop_wakeup is meant to be called from other threads, and
+// the pointer is only used while the audio thread keeps the mainloop alive
+// (it clears the waker under the lock before dropping it).
+unsafe impl Send for Waker {}
+
+type WakerSlot = Arc<Mutex<Option<Waker>>>;
+
+/// Clears the waker when the mainloop goes away.
+struct WakerGuard(WakerSlot);
+
+impl Drop for WakerGuard {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap() = None;
+    }
+}
 
 #[derive(Clone)]
 pub struct AudioHandle {
     tx: Sender<AudioCmd>,
     pub peaks: Peaks,
+    waker: WakerSlot,
 }
 
 impl AudioHandle {
     pub fn send(&self, cmd: AudioCmd) {
         let _ = self.tx.send(cmd);
+        if let Some(w) = &*self.waker.lock().unwrap() {
+            // SAFETY: see `Waker`.
+            unsafe { libpulse_sys::pa_mainloop_wakeup(w.0) };
+        }
     }
     pub fn peak(&self, key: &MeterKey) -> f32 {
         self.peaks.lock().unwrap().get(key).copied().unwrap_or(0.0)
     }
+
+    /// Wait (up to `timeout`) until the commands sent so far reached the server.
+    pub fn flush(&self, timeout: Duration) {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        self.send(AudioCmd::Flush(tx));
+        let _ = rx.recv_timeout(timeout);
+    }
 }
 
 /// Start the audio thread. `on_change` is called (on the audio thread) with a
-/// fresh snapshot whenever the server state changed.
+/// fresh snapshot whenever the server state changed. While disconnected it
+/// gets an empty state (`connected: false`).
 pub fn spawn(on_change: impl Fn(AudioState) + Send + 'static) -> AudioHandle {
     let (tx, rx) = crossbeam_channel::unbounded();
     let peaks: Peaks = Arc::default();
-    let p = peaks.clone();
+    let waker: WakerSlot = Arc::default();
+    let (p, w) = (peaks.clone(), waker.clone());
     std::thread::Builder::new()
         .name("audio".into())
         .spawn(move || {
             loop {
-                if let Err(e) = run(&rx, &p, &on_change) {
+                if let Err(e) = run(&rx, &p, &w, &on_change) {
                     eprintln!("audio: {e}; reconnecting in 2s");
                 }
                 on_change(AudioState::default());
                 std::thread::sleep(Duration::from_secs(2));
+                // Commands queued meanwhile name streams of the old server;
+                // the same numbers may belong to other streams after a restart.
+                while let Ok(cmd) = rx.try_recv() {
+                    if let AudioCmd::Flush(done) = cmd {
+                        let _ = done.send(());
+                    }
+                }
             }
         })
         .expect("spawn audio thread");
-    AudioHandle { tx, peaks }
+    AudioHandle { tx, peaks, waker }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -199,12 +242,19 @@ struct Shared {
     new_app_inputs: Vec<AppStream>,
 }
 
-fn run(rx: &Receiver<AudioCmd>, peaks: &Peaks, on_change: &dyn Fn(AudioState)) -> anyhow::Result<()> {
+fn run(
+    rx: &Receiver<AudioCmd>,
+    peaks: &Peaks,
+    waker: &WakerSlot,
+    on_change: &dyn Fn(AudioState),
+) -> anyhow::Result<()> {
     let mut mainloop = Mainloop::new().ok_or_else(|| anyhow::anyhow!("mainloop"))?;
+    *waker.lock().unwrap() = Some(Waker(mainloop._inner.get_ptr()));
+    let _guard = WakerGuard(waker.clone());
     let mut props = Proplist::new().unwrap();
     let _ = props.set_str("application.name", APP_NAME);
-    let _ = props.set_str("application.id", "dev.slidewire.Slidewire");
-    let _ = props.set_str("application.icon_name", "slidewire");
+    let _ = props.set_str("application.id", crate::APP_ID);
+    let _ = props.set_str("application.icon_name", crate::APP_ID);
     let ctx = Rc::new(RefCell::new(
         Context::new_with_proplist(&mainloop, APP_NAME, &props).ok_or_else(|| anyhow::anyhow!("context"))?,
     ));
@@ -253,20 +303,28 @@ fn run(rx: &Receiver<AudioCmd>, peaks: &Peaks, on_change: &dyn Fn(AudioState)) -
 
     let mut meters: HashMap<MeterKey, Rc<RefCell<Stream>>> = HashMap::new();
     let mut wanted_meters: HashSet<MeterKey> = HashSet::new();
+    let mut flushes: Vec<Sender<()>> = Vec::new();
 
     loop {
-        // Run all pending PulseAudio work without blocking.
+        // Sleep until the server has something for us or a command arrives
+        // (AudioHandle::send wakes the mainloop). A flush waiting for an
+        // answer must not sleep.
+        let mut block = flushes.is_empty();
         loop {
-            match mainloop.iterate(false) {
-                IterateResult::Success(0) => break,
+            match mainloop.iterate(block) {
+                IterateResult::Success(0) if !block => break,
                 IterateResult::Success(_) => {}
                 IterateResult::Err(e) => anyhow::bail!("iterate: {e}"),
                 IterateResult::Quit(_) => anyhow::bail!("quit"),
             }
+            block = false;
         }
         match ctx.borrow().get_state() {
             CtxState::Failed | CtxState::Terminated => anyhow::bail!("connection lost"),
             _ => {}
+        }
+        for done in flushes.drain(..) {
+            let _ = done.send(());
         }
 
         refresh(&ctx, &shared);
@@ -285,21 +343,11 @@ fn run(rx: &Receiver<AudioCmd>, peaks: &Peaks, on_change: &dyn Fn(AudioState)) -
             on_change(st);
         }
 
-        // Commands, waiting a little so the loop doesn't spin.
-        let mut first = true;
         loop {
-            let cmd = if first {
-                first = false;
-                match rx.recv_timeout(Duration::from_millis(5)) {
-                    Ok(c) => c,
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => break,
-                    Err(_) => return Ok(()),
-                }
-            } else {
-                match rx.try_recv() {
-                    Ok(c) => c,
-                    Err(_) => break,
-                }
+            let cmd = match rx.try_recv() {
+                Ok(c) => c,
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => return Ok(()),
             };
             match cmd {
                 AudioCmd::SetMeters(keys) => {
@@ -307,6 +355,7 @@ fn run(rx: &Receiver<AudioCmd>, peaks: &Peaks, on_change: &dyn Fn(AudioState)) -
                     let st = shared.borrow().state.clone();
                     sync_meters(&ctx, &st, &wanted_meters, &mut meters, peaks);
                 }
+                AudioCmd::Flush(done) => flushes.push(done),
                 other => apply(&ctx, &shared, other),
             }
         }
@@ -530,7 +579,7 @@ fn apply(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>, cmd: AudioCmd
             Kind::SourceOutput => drop(intro.move_source_output_by_name(index, &device, None)),
             _ => {}
         },
-        AudioCmd::SetMeters(_) => {}
+        AudioCmd::SetMeters(_) | AudioCmd::Flush(_) => {}
     }
 }
 
