@@ -2,7 +2,10 @@
 
 Control the volume of individual apps and audio devices with a MIDI controller: faders for volume, buttons for mute, assign and default device, and LEDs that show the state. It's an independent Linux app inspired by MIDI Mixer for Windows. It shares none of that app's code and has no accounts, subscriptions or limits.
 
-Built for KDE Plasma on PipeWire (or PulseAudio). The audio, MIDI and mixer parts work on any desktop; focus tracking and the volume pop-up use KDE.
+Built on KDE Plasma with PipeWire (or PulseAudio), and works on other desktops too:
+- focus tracking works on KWin, Hyprland and sway
+- the volume pop-up is Plasma's own, or a desktop notification elsewhere
+- file dialogs go through the XDG portal
 
 ## Build and install
 
@@ -24,7 +27,11 @@ cargo build --release
 
 Requires `libpulse` and `alsa-lib`, which are already present on any desktop with sound.
 
+The package also installs a systemd user unit. With it, **Start when I log in** enables `slidewire.service`, which starts with your session and restarts if it ever crashes.
+
 ## First run
+
+A short welcome walks you through it: pick your controller, move a control to check it arrives, then assign your first app.
 
 A **Korg nanoKONTROL2** profile is created automatically:
 
@@ -49,7 +56,26 @@ The **Mixer** page looks like a console:
 - faders and knobs can be dragged, scrolled, or double-clicked to jump to 100%
 - each app in the Sources panel has a **Play on…** menu to move it to another output
 - **Banks**: the tabs above the console. Each bank has its own assignments, so 8 faders can control 16, 24, ... things.
-- **Scenes**: save every strip's volume and mute under a name, and recall it from the Scenes menu or a button.
+- **Scenes**: save every strip's volume and mute under a name, and recall it from the Scenes menu, a button or the tray.
+- **Master**: a fixed strip at the right end controls the default output; click its display to switch outputs. It appears when the window is wide enough.
+- Right-click a strip to **name** it, give it a **colour** (a band on top, its glow and its display), pick an **icon**, or **clear** it.
+- Faders are marked in dB. Each strip can also have its own range, e.g. a mic that never goes below 40%, and its own curve.
+- **Ducking**: set a strip (Discord, say) to "Turn other apps down while this plays". Music on the other strips then dips by the amount you choose whenever it plays, and comes back after.
+- In the Sources panel, an app with several streams (a game, a browser) gets one row. A filter box appears when the list is long.
+
+Mistakes are cheap: removing an assignment, clearing a strip, deleting a scene and recalling a scene all show a toast with **Undo**. **Ctrl+Z** / **Ctrl+Shift+Z** step through changes to assignments and the profile.
+
+**Keyboard** (F1 shows the list):
+- **Ctrl+1…6** switch pages
+- **1…9** pick a channel strip; then **↑/↓** move its fader and **M** mutes it
+- **Ctrl+F** filters the sources
+
+**Look:** Settings → Appearance switches between dark, light or following the desktop, and picks an accent colour (or uses the desktop's). It also has Reduce motion.
+
+**Tray:**
+- the icon gets a mute badge while the output is muted
+- scrolling over it changes the volume
+- its menu has scenes, banks, mic mute and profiles
 
 **Pick up (soft takeover):** when a volume changed somewhere else (another app, a scene, a bank switch), the fader doesn't jump it on the next touch. It takes over once it reaches the current volume; until then the mixer shows where your fader is in amber. Settings → Volume → Pick up.
 
@@ -63,9 +89,16 @@ Each strip can control any combination of:
 - system sounds
 - any output or input device, or the current default device
 
-Buttons outside the strips (**Buttons** page) can run media keys, toggle mutes, set or cycle the default device, run a command, press keys, switch profile, bank or scene, mute all inputs, or act as push-to-talk / push-to-mute.
+Buttons outside the strips (**Buttons** page) can:
+- send media keys, to whichever player is playing or to one you name
+- toggle mutes
+- set or cycle the default device
+- run a command or press keys
+- switch profile, bank or scene
+- mute all inputs, or act as push-to-talk / push-to-mute
+- control **OBS Studio**: switch scene, mute a source, start or stop recording or streaming. Set the obs-websocket address and password under Settings.
 
-**nanoKONTROL2 LEDs:** the device only lets the computer drive its button LEDs in *External* LED mode. Set it once with Korg's KONTROL Editor (it runs under Wine). In the default mode everything works, but the LEDs only light while a button is held.
+**nanoKONTROL2 LEDs:** the device only lets the computer drive its button LEDs in *External* LED mode. Set it once with Korg's KONTROL Editor (it runs under Wine). In the default mode everything works, but the LEDs only light while a button is held. **Settings → Test LEDs** lights each one in turn, so you can check.
 
 ## Other controllers
 
@@ -131,9 +164,17 @@ Set `SLIDEWIRE_CONFIG=/some/dir` to use another config directory. Settings from 
 
 It prints the LED messages the app sends back.
 
-`cargo test` checks the MIDI mapping math and the icon lookup. To also test importing the Windows app's profiles, point `SLIDEWIRE_WINDOWS_PROFILES` at a copy of its `profiles/` folder.
+`cargo test` checks things like:
+- the MIDI mapping, volume range and dB math
+- the ducking envelope
+- the undo history
+- theme contrast
+- profile compatibility
+- the parsers for portal, Hyprland and sway messages, and the OBS login To also test importing the Windows app's profiles, point `SLIDEWIRE_WINDOWS_PROFILES` at a copy of its `profiles/` folder.
 
-`scripts/screenshot.sh OUT_DIR mixer controller ...` screenshots the pages on a private X server (Xvfb), driven by the fake controller and a silent test stream. Nothing shows up on your desktop and none of your own audio streams are touched. `PRE_SHOT='xdotool ...'` runs commands on that display before each shot (clicks, drags, `echo "b 59" >"$NANO"` for controller input).
+`scripts/screenshot.sh OUT_DIR mixer controller ...` screenshots the pages on a private X server (Xvfb), driven by the fake controller and a silent test stream. Nothing shows up on your desktop and none of your own audio streams are touched. Two variables adjust a shot:
+- `PRE_SHOT='xdotool ...'` runs commands on that display before each shot: clicks, drags, or `echo "b 59" >"$NANO"` for controller input.
+- `SETTINGS='{"theme":"light"}'` overrides settings for the shot.
 
 ## License
 
