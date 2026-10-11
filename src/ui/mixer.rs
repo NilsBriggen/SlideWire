@@ -9,6 +9,7 @@ use super::theme::{self, icon, *};
 use super::widgets;
 use crate::audio::{AudioState, Kind, MeterKey};
 use crate::engine::{StripView, UiCmd};
+use crate::mapping;
 use crate::profile::{AppMatch, Target, Widget};
 
 const STRIP_MIN_W: f32 = 104.0;
@@ -265,6 +266,7 @@ impl App {
     ) {
         let response = ui.interact(zone, ui.id().with(("zone", &s.id)), Sense::click());
         let painter = ui.painter_at(zone.expand(12.0));
+        let curve = self.shared.lock().unwrap().store.settings.curve;
         let empty = s.targets.is_empty();
         let hovering = response.dnd_hover_payload::<Target>().is_some();
         let hover_t = theme::anim(ui.ctx(), response.id.with("drop"), if hovering { 1.0 } else { 0.0 }, 0.12);
@@ -292,6 +294,9 @@ impl App {
             self.add_target(&s.id, (*t).clone());
         }
 
+        if s.muted {
+            painter.rect_filled(zone.shrink(2.0), 8.0, MUTE.gamma_multiply(0.07));
+        }
         let inner = if compact { zone.shrink2(vec2(8.0, 6.0)) } else { zone.shrink2(vec2(8.0, 10.0)) };
         // A detached child, so drawing inside the zone doesn't move the parent's cursor.
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
@@ -317,8 +322,10 @@ impl App {
                     .and_then(|i| self.icons.image(std::slice::from_ref(i)))
                     .or_else(|| self.icons.image(&s.icon_hint))
                     .or_else(|| s.targets.first().and_then(|t| self.icons.image(&[target_icon_name(t).to_string()])));
+                // Faders show what they control as big icons; the LCD then has text only.
+                let img = if compact { img } else { self.strip_icons(ui, s, inner.width(), img) };
                 let dim = s.muted || s.resolved.is_empty();
-                let tint = s.color.map(|i| theme::strip_color(Some(i)));
+                let tint = if s.muted { Some(MUTE) } else { s.color.map(|i| theme::strip_color(Some(i))) };
                 let size = vec2(inner.width(), if compact { 24.0 } else { 30.0 });
                 let r = widgets::lcd(ui, size, img, &text, dim, tint);
                 if !empty {
@@ -357,11 +364,13 @@ impl App {
                         ui.add_space((inner.width() - led.x * 3.0 - 12.0) / 2.0);
                         self.strip_buttons(ui, s, audio, led, true);
                     });
-                    let h = ui.available_height() - if s.volume.is_some() { 46.0 } else { 34.0 };
+                    // Same height on every strip (room for the dB line), so faders line up.
+                    let h = ui.available_height() - 46.0;
                     let changed = ui
                         .horizontal(|ui| {
                             ui.add_space((inner.width() - 52.0 - 10.0 - 8.0) / 2.0);
-                            let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, s.pickup);
+                            let marks = if s.volume.is_some() { mapping::db_marks(s.range, curve) } else { Vec::new() };
+                            let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, s.pickup, &marks);
                             widgets::segment_meter(ui, s.peak, hold, vec2(10.0, h - 20.0));
                             r.changed()
                         })
@@ -384,6 +393,54 @@ impl App {
         egui::Popup::context_menu(&response)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| self.assign_menu(ui, s, audio));
+    }
+
+    /// Up to three big icons of what the strip controls, "+N" for more. Takes
+    /// the same height on every strip so the faders line up. Returns the
+    /// LCD's icon: none when the big icons already show it.
+    fn strip_icons<'a>(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &StripView,
+        width: f32,
+        lcd_icon: Option<egui::Image<'a>>,
+    ) -> Option<egui::Image<'a>> {
+        const SIZE: f32 = 34.0;
+        let mut images: Vec<egui::Image> = match &s.icon {
+            Some(i) => self.icons.image(std::slice::from_ref(i)).into_iter().collect(),
+            None => s.icons.iter().filter_map(|h| self.icons.image(h)).collect(),
+        };
+        if images.is_empty()
+            && !s.targets.is_empty()
+            && let Some(img) = lcd_icon.clone()
+        {
+            images.push(img);
+        }
+        let (rect, _) = ui.allocate_exact_size(vec2(width, SIZE), Sense::hover());
+        if images.is_empty() {
+            if s.targets.is_empty() {
+                let c = pal().text_faint.gamma_multiply(0.6);
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, icon::PLUS_CIRCLE, mono(22.0), c);
+            }
+            return lcd_icon;
+        }
+        let extra = images.len().saturating_sub(3);
+        let shown = images.len().min(3);
+        // Overlap a little when there are several.
+        let step = SIZE - 8.0;
+        let total = SIZE + step * (shown - 1) as f32 + if extra > 0 { 26.0 } else { 0.0 };
+        let mut x = rect.center().x - total / 2.0;
+        let tint = if s.muted { egui::Color32::from_white_alpha(110) } else { egui::Color32::WHITE };
+        for img in images.into_iter().take(3) {
+            let r = egui::Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::splat(SIZE));
+            img.tint(tint).paint_at(ui, r);
+            x += step;
+        }
+        if extra > 0 {
+            let p = egui::pos2(x + SIZE - step + 13.0, rect.center().y);
+            ui.painter().text(p, egui::Align2::CENTER_CENTER, format!("+{extra}"), semibold(12.0), pal().text_dim);
+        }
+        None
     }
 
     /// S (assign menu), M (mute) and, with `run`, R buttons.

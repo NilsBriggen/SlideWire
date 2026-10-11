@@ -69,7 +69,15 @@ fn scroll_delta(ui: &Ui, response: &Response) -> f32 {
 
 /// Long-throw fader. `pos` is 0..=1. Drag, scroll, double-click for 100%.
 /// `ghost` marks where the hardware fader is while it waits to pick up.
-pub fn fader(ui: &mut Ui, pos: &mut f32, size: Vec2, color: Color32, ghost: Option<f32>) -> Response {
+/// Vertical fader. `marks` are dB labels for the left side: (position, dB).
+pub fn fader(
+    ui: &mut Ui,
+    pos: &mut f32,
+    size: Vec2,
+    color: Color32,
+    ghost: Option<f32>,
+    marks: &[(f32, i32)],
+) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let cap = vec2(size.x.min(38.0), 20.0);
     let track = Rect::from_center_size(rect.center(), vec2(6.0, rect.height() - cap.y));
@@ -94,15 +102,33 @@ pub fn fader(ui: &mut Ui, pos: &mut f32, size: Vec2, color: Color32, ghost: Opti
     let glide = if response.dragged() { 0.0 } else { 0.08 };
     let shown = theme::anim(ui.ctx(), response.id.with("shown"), *pos, glide);
 
-    let painter = ui.painter_at(rect.expand(12.0));
-    // Tick marks on both sides.
+    let painter = ui.painter_at(rect.expand(16.0));
+    // Even ticks on the right; dB marks (or the same ticks) on the left.
     for i in 0..=10 {
         let y = track.bottom() - travel * i as f32 / 10.0;
         let major = i % 5 == 0;
         let len = if major { 8.0 } else { 4.0 };
         let c = if major { pal().text_faint } else { pal().tick };
-        painter.line_segment([pos2(track.left() - 6.0 - len, y), pos2(track.left() - 6.0, y)], Stroke::new(1.0, c));
+        if marks.is_empty() {
+            painter.line_segment([pos2(track.left() - 6.0 - len, y), pos2(track.left() - 6.0, y)], Stroke::new(1.0, c));
+        }
         painter.line_segment([pos2(track.right() + 6.0, y), pos2(track.right() + 6.0 + len, y)], Stroke::new(1.0, c));
+    }
+    if !marks.is_empty() {
+        let font = mono(9.5);
+        let mut last_y = f32::INFINITY;
+        let all = marks.iter().map(|&(p, db)| (p, db.to_string())).chain([(0.0, "-∞".to_string())]);
+        for (p, text) in all {
+            let y = track.bottom() - travel * p;
+            // Skip marks that would overlap the one above.
+            if (last_y - y).abs() < 11.0 {
+                continue;
+            }
+            last_y = y;
+            let x = track.left() - 6.0;
+            painter.line_segment([pos2(x - 4.0, y), pos2(x, y)], Stroke::new(1.0, pal().text_faint));
+            painter.text(pos2(x - 6.0, y), Align2::RIGHT_CENTER, text, font.clone(), pal().text_faint);
+        }
     }
     // Slot.
     painter.rect_filled(track, 3.0, SLOT);

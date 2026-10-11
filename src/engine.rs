@@ -82,6 +82,10 @@ pub struct StripView {
     pub icon_hint: Vec<String>,
     /// Where the hardware fader is while it waits to pick up the volume.
     pub pickup: Option<f32>,
+    /// Volume at the top of the fader (max volume times boost).
+    pub range: f32,
+    /// Icon names to try, per resolved target.
+    pub icons: Vec<Vec<String>>,
     /// User-set name, colour (index) and icon for the strip.
     pub label: Option<String>,
     pub color: Option<u8>,
@@ -1217,6 +1221,8 @@ impl Engine {
                     }),
                 icon_hint: res.first().map(|r| r.hints.clone()).unwrap_or_default(),
                 pickup: self.waiting.get(gid).copied().filter(|p| (p - position).abs() > 0.03),
+                range: max * boost,
+                icons: res.iter().map(|r| r.hints.clone()).collect(),
                 label: settings.and_then(|a| a.label.clone()),
                 color: settings.and_then(|a| a.color),
                 icon: settings.and_then(|a| a.icon.clone()),

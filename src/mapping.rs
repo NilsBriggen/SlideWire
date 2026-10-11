@@ -178,6 +178,19 @@ pub fn inverse_curve(vol: f32, exponent: f32) -> f32 {
     vol.clamp(0.0, 1.0).powf(1.0 / exponent.max(0.1))
 }
 
+/// Where the dB marks sit on a fader: (position 0..=1, dB) for the marks
+/// that fit. `range` is the volume at the top (max volume times boost);
+/// PulseAudio's volume scale is cubic, so dB = 60·log10(volume).
+pub fn db_marks(range: f32, exponent: f32) -> Vec<(f32, i32)> {
+    [6, 0, -6, -12, -24, -48]
+        .into_iter()
+        .filter_map(|db| {
+            let vol = 10f32.powf(db as f32 / 60.0);
+            (vol <= range + 1e-4).then(|| (inverse_curve(vol / range, exponent), db))
+        })
+        .collect()
+}
+
 /// Control as learned from an incoming message.
 pub fn learn(msg: &Msg, kind: ControlKind) -> Control {
     Control {
@@ -203,6 +216,20 @@ pub fn picks_up(last: Option<f32>, pos: f32, current: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn db_marks() {
+        let m = super::db_marks(1.0, 1.0);
+        assert_eq!(m.iter().map(|m| m.1).collect::<Vec<_>>(), [0, -6, -12, -24, -48]);
+        assert!((m[0].0 - 1.0).abs() < 1e-4);
+        assert!((m[1].0 - 0.794).abs() < 0.01); // -6 dB is 79% on the cubic scale
+        // With boost, +6 dB fits and 0 dB moves down.
+        let m = super::db_marks(1.5, 1.0);
+        assert_eq!(m[0].1, 6);
+        assert!((m[1].0 - 1.0 / 1.5).abs() < 1e-3);
+        // A steeper curve spreads the low end.
+        assert!(super::db_marks(1.0, 2.0)[4].0 > super::db_marks(1.0, 1.0)[4].0);
+    }
+
     use super::*;
 
     fn cc(control: u8, kind: ControlKind) -> Control {
