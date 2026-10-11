@@ -121,6 +121,8 @@ pub enum AudioCmd {
     SetVolume(Kind, u32, f32),
     SetMute(Kind, u32, bool),
     SetDefault(Kind, String),
+    /// Move an app's stream to another device (by name).
+    Move(Kind, u32, String),
     SetMeters(HashSet<MeterKey>),
 }
 
@@ -508,6 +510,11 @@ fn apply(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>, cmd: AudioCmd
         AudioCmd::SetDefault(kind, name) => match kind {
             Kind::Sink => drop(c.set_default_sink(&name, |_| {})),
             Kind::Source => drop(c.set_default_source(&name, |_| {})),
+            _ => {}
+        },
+        AudioCmd::Move(kind, index, device) => match kind {
+            Kind::SinkInput => drop(intro.move_sink_input_by_name(index, &device, None)),
+            Kind::SourceOutput => drop(intro.move_source_output_by_name(index, &device, None)),
             _ => {}
         },
         AudioCmd::SetMeters(_) => {}

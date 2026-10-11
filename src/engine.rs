@@ -43,6 +43,8 @@ pub enum UiCmd {
     Press(String),
     MuteAll,
     SetBank(usize),
+    /// Move an app's stream to the device with this name.
+    MoveStream(Kind, u32, String),
     /// Save the current strips under a name.
     SaveScene(String),
     RecallScene(String),
@@ -796,6 +798,7 @@ impl Engine {
                 }
             }
             UiCmd::SetBank(b) => self.set_bank(Some(b), 0),
+            UiCmd::MoveStream(kind, index, device) => self.audio.send(AudioCmd::Move(kind, index, device)),
             UiCmd::SaveScene(name) => self.save_scene(&name),
             UiCmd::RecallScene(name) => self.recall_scene(&name),
             UiCmd::MuteAll => {

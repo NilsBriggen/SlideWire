@@ -564,6 +564,7 @@ impl App {
                         peak,
                         max,
                         target,
+                        Some((a.device, &audio.sinks)),
                     );
                 }
             });
@@ -588,6 +589,7 @@ impl App {
                             0.0,
                             max,
                             target,
+                            Some((a.device, &audio.sources)),
                         );
                     }
                 });
@@ -612,6 +614,7 @@ impl App {
                         peak,
                         max,
                         target,
+                        None,
                     );
                 }
             });
@@ -635,6 +638,7 @@ impl App {
                         peak,
                         max,
                         target,
+                        None,
                     );
                 }
             });
@@ -656,6 +660,7 @@ impl App {
         peak: f32,
         max: f32,
         target: Target,
+        route: Option<(u32, &[crate::audio::Device])>,
     ) {
         let img = self.icons.image(hints);
         ui.horizontal(|ui| {
@@ -723,6 +728,24 @@ impl App {
             };
             if ui.add(egui::Button::new(m).frame(false)).on_hover_text(if mute { "Unmute" } else { "Mute" }).clicked() {
                 self.send(UiCmd::SetStreamMute(kind, index, !mute));
+            }
+            // Which device an app plays on (or records from).
+            if let Some((current, devices)) = route {
+                let hover = if kind == Kind::SinkInput { "Play on…" } else { "Record from…" };
+                let button = ui
+                    .add(egui::Button::new(RichText::new(icon::CARET_DOWN).color(TEXT_DIM)).frame(false))
+                    .on_hover_text(hover);
+                egui::Popup::menu(&button).show(|ui| {
+                    ui.label(RichText::new(hover).font(semibold(13.0)));
+                    for d in devices {
+                        let on = d.index == current;
+                        let text = format!("{}  {}", if on { icon::CHECK } else { "    " }, d.label);
+                        if ui.selectable_label(on, text).on_hover_text(&d.description).clicked() && !on {
+                            self.send(UiCmd::MoveStream(kind, index, d.name.clone()));
+                            ui.close();
+                        }
+                    }
+                });
             }
         });
         ui.add_space(2.0);
