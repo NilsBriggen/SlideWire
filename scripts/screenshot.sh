@@ -5,7 +5,8 @@
 #
 #   scripts/screenshot.sh OUT_DIR [tab...]     tabs: mixer controller buttons profiles settings log doctor
 #
-# Env: SIZE=1440x900 (screen size), KEEP=1 (leave the app running on :77).
+# Env: SIZE=1440x900 (screen size), KEEP=1 (leave the app running on :77),
+#      PRE_SHOT="xdotool ..." (run on the private display before each shot).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -73,6 +74,11 @@ for tab in "${TABS[@]}"; do
     sleep 0.8
     { echo "k 3 100"; } >"$WORK/nano"
     sleep 0.6
+    # PRE_SHOT: commands to run on the private display first (e.g. xdotool drags).
+    if [[ -n "${PRE_SHOT:-}" ]]; then
+        DISPLAY=$DISP bash -c "$PRE_SHOT"
+        sleep 0.5
+    fi
     DISPLAY=$DISP import -window root "$OUT/$tab.png"
     echo "b 48" >"$WORK/nano"
     if [[ "${KEEP:-}" == 1 ]]; then
