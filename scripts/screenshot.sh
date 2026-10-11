@@ -72,7 +72,7 @@ for tab in "${TABS[@]}"; do
     DISPLAY=$DISP xdotool search --name "Slidewire" windowsize $(( ${SIZE%x*} - 40 )) $(( ${SIZE#*x} - 40 )) windowmove 20 20 2>/dev/null || true
     sleep 0.8
     { echo "k 3 100"; } >"$WORK/nano"
-    sleep 0.1
+    sleep 0.6
     DISPLAY=$DISP import -window root "$OUT/$tab.png"
     echo "b 48" >"$WORK/nano"
     if [[ "${KEEP:-}" == 1 ]]; then

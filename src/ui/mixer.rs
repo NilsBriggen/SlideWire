@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use eframe::egui::{self, RichText, Sense, Stroke, StrokeKind, Vec2, vec2};
+use eframe::egui::{self, Color32, RichText, Sense, Stroke, StrokeKind, Vec2, vec2};
 
 use super::App;
 use super::theme::{icon, *};
@@ -11,9 +11,53 @@ use crate::audio::{AudioState, Kind, MeterKey};
 use crate::engine::{StripView, UiCmd};
 use crate::profile::{AppMatch, Target, Widget};
 
-const STRIP_W: f32 = 112.0;
+const STRIP_MIN_W: f32 = 104.0;
+const STRIP_MAX_W: f32 = 168.0;
+const GAP: f32 = 10.0;
 const FADER_H: f32 = 400.0;
 const KNOB_H: f32 = 236.0;
+/// Height of the knob section in a channel strip.
+const CHANNEL_KNOB_H: f32 = 140.0;
+
+/// A hardware channel: the knob and the fader with the same number.
+struct Channel<'a> {
+    no: u32,
+    knob: &'a StripView,
+    fader: &'a StripView,
+}
+
+fn channel_no(name: &str) -> Option<u32> {
+    name.rsplit(' ').next()?.parse().ok()
+}
+
+/// Pair knobs and faders by the number in their names ("Knob 3" + "Fader 3").
+/// Strips without a partner are returned separately.
+fn pair_channels(strips: &[StripView]) -> (Vec<Channel<'_>>, Vec<&StripView>) {
+    let mut channels = Vec::new();
+    let mut used = HashSet::new();
+    for f in strips.iter().filter(|s| !s.knob) {
+        let Some(no) = channel_no(&f.name) else { continue };
+        if let Some(k) = strips.iter().find(|s| s.knob && !used.contains(&s.id) && channel_no(&s.name) == Some(no)) {
+            used.insert(k.id.clone());
+            used.insert(f.id.clone());
+            channels.push(Channel { no, knob: k, fader: f });
+        }
+    }
+    channels.sort_by_key(|c| c.no);
+    let rest = strips.iter().filter(|s| !used.contains(&s.id)).collect();
+    (channels, rest)
+}
+
+/// Strip width that fills `avail` with `n` strips.
+fn strip_width(avail: f32, n: usize) -> f32 {
+    let n = n.max(1) as f32;
+    ((avail - GAP * (n - 1.0)) / n).clamp(STRIP_MIN_W, STRIP_MAX_W)
+}
+
+/// PulseAudio volume (cubic scale) in dB.
+fn db_text(vol: f32) -> String {
+    if vol <= 0.0005 { "-inf dB".into() } else { format!("{:.1} dB", 60.0 * vol.log10()) }
+}
 
 impl App {
     pub(super) fn mixer(&mut self, ui: &mut egui::Ui) {
@@ -38,17 +82,39 @@ impl App {
             });
             return;
         }
-        let (knobs, faders): (Vec<&StripView>, Vec<&StripView>) = strips.iter().partition(|s| s.knob);
+        let dragging = egui::DragAndDrop::has_payload_of_type::<Target>(ui.ctx());
+        let (channels, rest) = pair_channels(&strips);
+        // Measured outside the scroll area, which would report its scrollbars' space too.
+        let avail = ui.available_width();
+        let avail_h = ui.available_height();
         egui::ScrollArea::both().id_salt("console").auto_shrink([false, false]).show(ui, |ui| {
+            if !channels.is_empty() {
+                let w = strip_width(avail, channels.len());
+                let h = (avail_h - if rest.is_empty() { 4.0 } else { 280.0 }).max(520.0);
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = GAP;
+                    for c in &channels {
+                        self.channel_strip(ui, c, &audio, vec2(w, h), dragging);
+                    }
+                });
+                if !rest.is_empty() {
+                    ui.add_space(14.0);
+                }
+            }
+            // Other controllers: one row per kind of strip.
+            let (knobs, faders): (Vec<&StripView>, Vec<&StripView>) = rest.into_iter().partition(|s| s.knob);
             for (row, label, height) in [(&knobs, "Rotary", KNOB_H), (&faders, "Faders", FADER_H)] {
                 if row.is_empty() {
                     continue;
                 }
                 ui.label(RichText::new(label.to_uppercase()).size(11.0).color(TEXT_FAINT));
+                let w = strip_width(avail, row.len());
                 ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.spacing_mut().item_spacing.x = GAP;
                     for s in row.iter() {
-                        self.strip(ui, s, &audio, height);
+                        let (rect, _) = ui.allocate_exact_size(vec2(w, height), Sense::hover());
+                        widgets::bevel_panel(&ui.painter_at(rect.expand(12.0)), rect, 8, STRIP_TOP, STRIP_BOTTOM);
+                        self.section(ui, s, rect, &audio, false, Some(&s.name), dragging);
                     }
                 });
                 ui.add_space(14.0);
@@ -56,125 +122,172 @@ impl App {
         });
     }
 
-    fn strip(&mut self, ui: &mut egui::Ui, s: &StripView, audio: &AudioState, height: f32) {
-        let (rect, response) = ui.allocate_exact_size(vec2(STRIP_W, height), Sense::hover());
+    /// Knob on top, fader below, like the channel on the hardware.
+    fn channel_strip(&mut self, ui: &mut egui::Ui, c: &Channel, audio: &AudioState, size: Vec2, dragging: bool) {
+        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         let painter = ui.painter_at(rect.expand(12.0));
         widgets::bevel_panel(&painter, rect, 8, STRIP_TOP, STRIP_BOTTOM);
+        let head = egui::Rect::from_min_size(rect.min, vec2(rect.width(), 28.0));
+        painter.text(head.center(), egui::Align2::CENTER_CENTER, c.no.to_string(), semibold(15.0), TEXT_DIM);
+        let split = head.bottom() + CHANNEL_KNOB_H;
+        let knob_zone =
+            egui::Rect::from_min_max(egui::pos2(rect.left(), head.bottom()), egui::pos2(rect.right(), split));
+        let fader_zone = egui::Rect::from_min_max(egui::pos2(rect.left(), split), rect.max);
+        // Engraved divider.
+        let (l, r) = (rect.left() + 10.0, rect.right() - 10.0);
+        painter.line_segment(
+            [egui::pos2(l, split), egui::pos2(r, split)],
+            Stroke::new(1.0, Color32::from_black_alpha(140)),
+        );
+        painter.line_segment(
+            [egui::pos2(l, split + 1.0), egui::pos2(r, split + 1.0)],
+            Stroke::new(1.0, Color32::from_white_alpha(10)),
+        );
+        self.section(ui, c.knob, knob_zone, audio, true, None, dragging);
+        self.section(ui, c.fader, fader_zone, audio, false, None, dragging);
+    }
 
-        // Drop target for dragged sources.
+    /// One strip's controls inside `zone`: a drop target with display, buttons,
+    /// knob or fader, meter and readout. `compact` is the knob part of a
+    /// channel strip.
+    #[allow(clippy::too_many_arguments)]
+    fn section(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &StripView,
+        zone: egui::Rect,
+        audio: &AudioState,
+        compact: bool,
+        title: Option<&str>,
+        dragging: bool,
+    ) {
+        let response = ui.interact(zone, ui.id().with(("zone", &s.id)), Sense::click());
+        let painter = ui.painter_at(zone.expand(12.0));
+        let empty = s.targets.is_empty();
         let hovering = response.dnd_hover_payload::<Target>().is_some();
         if hovering {
-            widgets::glow(&painter, rect, 8.0, CYAN.gamma_multiply(0.35), 14.0);
-            painter.rect_stroke(rect, 8.0, Stroke::new(2.0, CYAN), StrokeKind::Inside);
+            widgets::glow(&painter, zone.shrink(2.0), 8.0, CYAN.gamma_multiply(0.35), 14.0);
+            painter.rect_stroke(zone.shrink(2.0), 8.0, Stroke::new(2.0, CYAN), StrokeKind::Inside);
+        } else if dragging {
+            painter.rect_stroke(zone.shrink(3.0), 7.0, Stroke::new(1.0, CYAN.gamma_multiply(0.35)), StrokeKind::Inside);
         }
         if let Some(t) = response.dnd_release_payload::<Target>() {
             self.add_target(&s.id, (*t).clone());
         }
 
-        let inner = rect.shrink2(vec2(8.0, 10.0));
-        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-            ui.spacing_mut().item_spacing.y = 8.0;
+        let inner = if compact { zone.shrink2(vec2(8.0, 6.0)) } else { zone.shrink2(vec2(8.0, 10.0)) };
+        // A detached child, so drawing inside the zone doesn't move the parent's cursor.
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
+        {
+            let ui = &mut child;
+            ui.spacing_mut().item_spacing.y = if compact { 6.0 } else { 8.0 };
             ui.vertical_centered(|ui| {
-                ui.add(egui::Label::new(RichText::new(&s.name).font(semibold(13.5))).truncate());
+                if let Some(title) = title {
+                    ui.add(egui::Label::new(RichText::new(title).font(semibold(13.5))).truncate());
+                }
                 let text = if !s.resolved.is_empty() {
                     s.resolved.join(" + ")
                 } else if !s.targets.is_empty() {
                     s.targets.iter().map(|t| t.label()).collect::<Vec<_>>().join(" + ")
+                } else if dragging {
+                    "drop here".into()
                 } else {
-                    "— empty —".into()
+                    "empty".into()
                 };
                 let img = self
                     .icons
                     .image(&s.icon_hint)
                     .or_else(|| s.targets.first().and_then(|t| self.icons.image(&[target_icon_name(t).to_string()])));
                 let dim = s.muted || s.resolved.is_empty();
-                let r = widgets::lcd(ui, vec2(inner.width(), 30.0), img, &text, dim);
-                if !s.targets.is_empty() {
+                let r = widgets::lcd(ui, vec2(inner.width(), if compact { 24.0 } else { 30.0 }), img, &text, dim);
+                if !empty {
                     r.on_hover_text(&text);
                 }
 
-                let led = vec2(28.0, 22.0);
-                let (mut mute, mut run) = (false, false);
-                let mut s_resp = None;
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.add_space((inner.width() - led.x * 3.0 - 12.0) / 2.0);
-                    s_resp = Some(widgets::led_button(ui, "S", s.assigned, ASSIGN, led).on_hover_text("Assign"));
-                    mute = widgets::led_button(ui, "M", s.muted, MUTE, led).on_hover_text("Mute").clicked();
-                    run = widgets::led_button(ui, "R", s.running, RUN, led)
-                        .on_hover_text("Run: make the device default / start the app")
-                        .clicked();
-                });
-                if mute {
-                    self.send(UiCmd::ToggleGroupMute(s.id.clone()));
-                }
-                if run {
-                    self.send(UiCmd::PressRun(s.id.clone()));
-                }
-                if let Some(r) = &s_resp {
-                    egui::Popup::menu(r)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show(|ui| self.assign_menu(ui, s, audio));
-                }
-
-                // Peak hold: decays after 1.5 s.
-                let now = ui.input(|i| i.time);
-                let hold = {
-                    let e = self.meter_hold.entry(s.id.clone()).or_insert((0.0, now));
-                    if s.peak >= e.0 || now - e.1 > 1.5 {
-                        *e = (s.peak, now);
-                    }
-                    e.0
-                };
-
+                let hold = self.peak_hold(ui, s);
                 let color = if s.muted { CYAN.gamma_multiply(0.35) } else { CYAN };
                 let mut pos = s.position;
-                let changed = if s.knob {
-                    ui.horizontal(|ui| {
-                        ui.add_space((inner.width() - 74.0 - 8.0 - 8.0) / 2.0);
-                        let r = widgets::knob(ui, &mut pos, 74.0, color, s.pickup);
-                        widgets::segment_meter(ui, s.peak, hold, vec2(8.0, 74.0));
-                        r.changed()
-                    })
-                    .inner
-                } else {
-                    let h = ui.available_height() - 34.0;
-                    ui.horizontal(|ui| {
-                        ui.add_space((inner.width() - 52.0 - 10.0 - 8.0) / 2.0);
-                        let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, s.pickup);
-                        widgets::segment_meter(ui, s.peak, hold, vec2(10.0, h - 20.0));
-                        r.changed()
-                    })
-                    .inner
-                };
-                if changed {
-                    self.send(UiCmd::SetGroupPosition(s.id.clone(), pos));
-                }
-                match s.pickup {
-                    // The hardware control has to reach the volume first.
-                    Some(hw) if !s.muted => {
-                        let arrow = if hw < s.position { icon::ARROW_UP } else { icon::ARROW_DOWN };
-                        ui.label(
-                            RichText::new(format!("{arrow}{:>3.0}%", s.position * 100.0))
-                                .font(mono(13.0))
-                                .color(ASSIGN),
-                        )
-                        .on_hover_text(format!(
-                            "Your controller is at {:.0}%. Move it {} to the volume to take over.",
-                            hw * 100.0,
-                            if hw < s.position { "up" } else { "down" }
-                        ));
+                if compact {
+                    let d = 58.0;
+                    let changed = ui
+                        .horizontal(|ui| {
+                            ui.add_space((inner.width() - d - 6.0 - 8.0) / 2.0);
+                            let r = widgets::knob(ui, &mut pos, d, color, s.pickup);
+                            widgets::segment_meter(ui, s.peak, hold, vec2(6.0, d));
+                            r.changed()
+                        })
+                        .inner;
+                    if changed {
+                        self.send(UiCmd::SetGroupPosition(s.id.clone(), pos));
                     }
-                    _ => {
-                        let readout =
-                            if s.muted { "MUTE".to_string() } else { format!("{:>3.0}%", s.position * 100.0) };
-                        ui.label(RichText::new(readout).font(mono(13.0)).color(if s.muted { MUTE } else { LCD_TEXT }));
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        let small = vec2(22.0, 18.0);
+                        ui.add_space(((inner.width() - 2.0 * small.x - 4.0 - 52.0) / 2.0).max(0.0));
+                        self.strip_buttons(ui, s, audio, small, false);
+                        ui.add_space(4.0);
+                        readout(ui, s, 12.0);
+                    });
+                } else {
+                    let led = vec2(28.0, 22.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.add_space((inner.width() - led.x * 3.0 - 12.0) / 2.0);
+                        self.strip_buttons(ui, s, audio, led, true);
+                    });
+                    let h = ui.available_height() - if s.volume.is_some() { 46.0 } else { 34.0 };
+                    let changed = ui
+                        .horizontal(|ui| {
+                            ui.add_space((inner.width() - 52.0 - 10.0 - 8.0) / 2.0);
+                            let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, s.pickup);
+                            widgets::segment_meter(ui, s.peak, hold, vec2(10.0, h - 20.0));
+                            r.changed()
+                        })
+                        .inner;
+                    if changed {
+                        self.send(UiCmd::SetGroupPosition(s.id.clone(), pos));
+                    }
+                    readout(ui, s, 13.0);
+                    if let Some(v) = s.volume.filter(|_| !s.muted) {
+                        ui.add_space(-6.0);
+                        ui.label(RichText::new(db_text(v)).font(mono(10.5)).color(TEXT_FAINT));
                     }
                 }
             });
-        });
-
+        }
+        // Unassigned strips recede until something is dragged onto them.
+        if empty && !dragging {
+            painter.rect_filled(zone.shrink(1.0), 8.0, Color32::from_rgba_unmultiplied(0x15, 0x16, 0x1b, 120));
+        }
         response.context_menu(|ui| self.assign_menu(ui, s, audio));
+    }
+
+    /// S (assign menu), M (mute) and, with `run`, R buttons.
+    fn strip_buttons(&mut self, ui: &mut egui::Ui, s: &StripView, audio: &AudioState, size: Vec2, run: bool) {
+        let s_resp = widgets::led_button(ui, "S", s.assigned, ASSIGN, size).on_hover_text("Assign");
+        if widgets::led_button(ui, "M", s.muted, MUTE, size).on_hover_text("Mute").clicked() {
+            self.send(UiCmd::ToggleGroupMute(s.id.clone()));
+        }
+        if run
+            && widgets::led_button(ui, "R", s.running, RUN, size)
+                .on_hover_text("Run: make the device default / start the app")
+                .clicked()
+        {
+            self.send(UiCmd::PressRun(s.id.clone()));
+        }
+        egui::Popup::menu(&s_resp)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| self.assign_menu(ui, s, audio));
+    }
+
+    /// Peak hold for the meter: decays after 1.5 s.
+    fn peak_hold(&mut self, ui: &egui::Ui, s: &StripView) -> f32 {
+        let now = ui.input(|i| i.time);
+        let e = self.meter_hold.entry(s.id.clone()).or_insert((0.0, now));
+        if s.peak >= e.0 || now - e.1 > 1.5 {
+            *e = (s.peak, now);
+        }
+        e.0
     }
 
     fn assign_menu(&mut self, ui: &mut egui::Ui, s: &StripView, audio: &AudioState) {
@@ -546,5 +659,25 @@ pub(super) fn target_glyph(t: &Target) -> &'static str {
         Target::EventSounds => icon::BELL,
         Target::Output { .. } | Target::DefaultOutput => icon::SPEAKER_HIGH,
         Target::Input { .. } | Target::DefaultInput => icon::MICROPHONE_STAGE,
+    }
+}
+
+/// "47%", "MUTE", or the volume in amber with an arrow while the hardware
+/// control waits to pick it up.
+fn readout(ui: &mut egui::Ui, s: &StripView, size: f32) {
+    match s.pickup {
+        Some(hw) if !s.muted => {
+            let arrow = if hw < s.position { icon::ARROW_UP } else { icon::ARROW_DOWN };
+            ui.label(RichText::new(format!("{arrow}{:>3.0}%", s.position * 100.0)).font(mono(size)).color(ASSIGN))
+                .on_hover_text(format!(
+                    "Your controller is at {:.0}%. Move it {} to the volume to take over.",
+                    hw * 100.0,
+                    if hw < s.position { "up" } else { "down" }
+                ));
+        }
+        _ => {
+            let text = if s.muted { "MUTE".to_string() } else { format!("{:>3.0}%", s.position * 100.0) };
+            ui.label(RichText::new(text).font(mono(size)).color(if s.muted { MUTE } else { LCD_TEXT }));
+        }
     }
 }

@@ -63,6 +63,8 @@ pub struct StripView {
     /// Labels of what the targets currently resolve to.
     pub resolved: Vec<String>,
     pub position: f32,
+    /// Volume of the first resolved target (1.0 = 100%), if any.
+    pub volume: Option<f32>,
     pub muted: bool,
     pub peak: f32,
     pub assigned: bool,
@@ -1040,6 +1042,7 @@ impl Engine {
                 targets: targets.clone(),
                 resolved: res.iter().map(|r| r.label.clone()).collect(),
                 position,
+                volume: res.first().map(|r| r.volume),
                 muted,
                 peak: self.peaks.get(gid).copied().unwrap_or(0.0),
                 assigned,

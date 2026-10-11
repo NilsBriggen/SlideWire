@@ -61,8 +61,11 @@ pub fn install(ctx: &egui::Context) {
     semi[0] = "inter-semibold".into();
     fonts.families.insert(FontFamily::Name("semibold".into()), semi);
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    // Icons inside semibold text, too.
+    // Icons inside semibold and monospace text, too.
     if let Some(f) = fonts.families.get_mut(&FontFamily::Name("semibold".into())) {
+        f.insert(1, "phosphor".into());
+    }
+    if let Some(f) = fonts.families.get_mut(&FontFamily::Monospace) {
         f.insert(1, "phosphor".into());
     }
     ctx.set_fonts(fonts);
