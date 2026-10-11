@@ -53,6 +53,8 @@ pub struct App {
     /// Peak-hold per strip: (value, time it was set).
     meter_hold: HashMap<String, (f32, f64)>,
     show_sources: bool,
+    show_doctor: bool,
+    doctor: Option<(Instant, Vec<crate::doctor::Check>)>,
 }
 
 impl App {
@@ -94,6 +96,8 @@ impl App {
             expanded_control: None,
             meter_hold: HashMap::new(),
             show_sources: true,
+            show_doctor: crate::config::env("TAB").as_deref() == Some("doctor"),
+            doctor: None,
         }
     }
 
@@ -206,12 +210,19 @@ impl App {
                 }
                 let (led, text) = match (&connected, &profile) {
                     (Some(port), Some(p)) => {
-                        (if blink { ASSIGN } else { RUN }, format!("{p} · {}", port.split(':').next().unwrap_or(port)))
+                        (if blink { ASSIGN } else { RUN }, format!("{p} · {}", crate::midi::display_name(port)))
                     }
-                    (None, Some(p)) => (TEXT_FAINT, format!("{p} · not connected")),
+                    (None, Some(p)) => (MUTE, format!("{p} · not connected")),
                     _ => (TEXT_FAINT, "No profile".into()),
                 };
-                widgets::pill(ui, Some(led), &text);
+                let pill = widgets::pill(ui, Some(led), &text)
+                    .interact(Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("Connection check");
+                if pill.clicked() {
+                    self.show_doctor = !self.show_doctor;
+                    self.doctor = None;
+                }
                 if !pulse {
                     widgets::pill(ui, Some(MUTE), "Audio server offline");
                 }
@@ -227,6 +238,52 @@ impl App {
                 }
             });
         });
+    }
+}
+
+impl App {
+    /// The connection check, opened from the status pill.
+    fn doctor_window(&mut self, ctx: &egui::Context) {
+        if !self.show_doctor {
+            return;
+        }
+        if self.doctor.as_ref().is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(2)) {
+            let sh = self.shared.lock().unwrap();
+            let pattern = sh.active().map(|p| p.input.clone()).unwrap_or_default();
+            let mut checks = crate::doctor::diagnose(&pattern, &sh.ports_in);
+            checks.push(crate::doctor::connection(sh.connected_in.as_deref(), sh.midi_error.as_deref()));
+            self.doctor = Some((Instant::now(), checks));
+        }
+        let checks = self.doctor.as_ref().map(|(_, c)| c.clone()).unwrap_or_default();
+        let mut open = true;
+        egui::Window::new(format!("{}  Connection check", icon::STETHOSCOPE))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(460.0)
+            .anchor(egui::Align2::RIGHT_TOP, vec2(-16.0, 64.0))
+            .frame(egui::Frame::window(&ctx.global_style()).inner_margin(16))
+            .show(ctx, |ui| {
+                ui.set_width(460.0);
+                for c in &checks {
+                    let (ic, color) = match c.status {
+                        crate::doctor::Status::Ok => (icon::CHECK_CIRCLE, RUN),
+                        crate::doctor::Status::Warn => (icon::WARNING, ASSIGN),
+                        crate::doctor::Status::Fail => (icon::X_CIRCLE, MUTE),
+                    };
+                    ui.horizontal_top(|ui| {
+                        ui.label(RichText::new(ic).size(18.0).color(color));
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(&c.title).font(semibold(14.0)));
+                            ui.add(egui::Label::new(RichText::new(&c.detail).color(TEXT_DIM).size(12.5)).wrap());
+                        });
+                    });
+                    ui.add_space(4.0);
+                }
+                widgets::hint(ui, "Updates every 2 seconds. Same checks from a terminal: slidewire --doctor");
+            });
+        ctx.request_repaint_after(Duration::from_secs(1));
+        self.show_doctor = open;
     }
 }
 
@@ -304,6 +361,7 @@ impl eframe::App for App {
                 Tab::Log => self.log(ui),
             },
         );
+        self.doctor_window(&ctx);
 
         // Meters and the activity LEDs animate; keep frames coming while visible.
         ctx.request_repaint_after(Duration::from_millis(250));

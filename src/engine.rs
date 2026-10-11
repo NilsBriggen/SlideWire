@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
-use midir::{MidiInputConnection, MidiOutputConnection};
 use regex::Regex;
 
 use crate::audio::{AppStream, AudioCmd, AudioHandle, AudioState, Kind, MeterKey};
@@ -86,6 +85,8 @@ pub struct Shared {
     pub ports_out: Vec<String>,
     pub connected_in: Option<String>,
     pub connected_out: Option<String>,
+    /// The last error connecting to the profile's input, for the doctor panel.
+    pub midi_error: Option<String>,
     pub last_msg: Option<(String, Instant)>,
     pub learn: Option<LearnRequest>,
     pub strips: Vec<StripView>,
@@ -146,9 +147,9 @@ pub struct Engine {
     audio: AudioHandle,
     osd: Osd,
     lister: PortLister,
-    input: Option<MidiInputConnection<()>>,
-    output: Option<MidiOutputConnection>,
-    passthru: Option<(String, MidiOutputConnection)>,
+    input: Option<midi::MidiIn>,
+    output: Option<midi::MidiOut>,
+    passthru: Option<(String, midi::MidiOut)>,
     /// Last bytes sent per output address, to avoid flooding the device.
     sent: HashMap<(u8, u8), Vec<u8>>,
     /// Slider positions for groups (for relative encoders and groups whose
@@ -290,6 +291,9 @@ impl Engine {
         if want_in != sh.connected_in || (want_in.is_some() && self.input.is_none()) {
             self.input = None;
             sh.connected_in = None;
+            if want_in.is_none() {
+                sh.midi_error = None;
+            }
             if let Some(port) = &want_in {
                 let tx = self.tx.clone();
                 match midi::connect_input(port, move |b| {
@@ -298,9 +302,16 @@ impl Engine {
                     Ok(c) => {
                         self.input = Some(c);
                         sh.connected_in = Some(port.clone());
+                        sh.midi_error = None;
                         sh.log(format!("Connected input {port}"));
                     }
-                    Err(e) => sh.log(format!("{e:#}")),
+                    Err(e) => {
+                        let msg = format!("{e:#}");
+                        if sh.midi_error.as_deref() != Some(msg.as_str()) {
+                            sh.log(msg.clone());
+                        }
+                        sh.midi_error = Some(msg);
+                    }
                 }
             }
         }

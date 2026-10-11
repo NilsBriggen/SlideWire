@@ -5,6 +5,7 @@ mod actions;
 mod audio;
 mod config;
 mod dbus;
+mod doctor;
 mod engine;
 mod icon;
 mod mapping;
@@ -36,6 +37,7 @@ OPTIONS:
     --minimized          start in the tray without opening the window
     --list-ports         list MIDI ports and exit
     --monitor [PATTERN]  print incoming MIDI messages (from ports matching PATTERN)
+    --doctor [PATTERN]   check why a controller doesn't show up (default: nanoKONTROL2)
     --install-icon       install the icon and a desktop entry for the current user
     -h, --help           show this help
 ";
@@ -63,6 +65,19 @@ fn main() {
                 if let Err(e) = midi::monitor(pattern) {
                     eprintln!("{e:#}");
                     std::process::exit(1);
+                }
+                return;
+            }
+            "--doctor" => {
+                let pattern = args.get(i + 1).map(String::as_str).unwrap_or("nanoKONTROL2");
+                let ports = midi::PortLister::new().inputs();
+                for c in doctor::diagnose(pattern, &ports) {
+                    let mark = match c.status {
+                        doctor::Status::Ok => "ok  ",
+                        doctor::Status::Warn => "warn",
+                        doctor::Status::Fail => "FAIL",
+                    };
+                    println!("[{mark}] {}\n       {}", c.title, c.detail);
                 }
                 return;
             }
@@ -107,6 +122,7 @@ fn main() {
         ports_out: Vec::new(),
         connected_in: None,
         connected_out: None,
+        midi_error: None,
         last_msg: None,
         learn: None,
         strips: Vec::new(),

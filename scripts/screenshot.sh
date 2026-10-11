@@ -3,7 +3,7 @@
 # nanoKONTROL2 and a silent test stream. Nothing appears on your desktop and
 # only the test stream's volume is touched.
 #
-#   scripts/screenshot.sh OUT_DIR [tab...]     tabs: mixer controller buttons profiles settings log
+#   scripts/screenshot.sh OUT_DIR [tab...]     tabs: mixer controller buttons profiles settings log doctor
 #
 # Env: SIZE=1440x900 (screen size), KEEP=1 (leave the app running on :77).
 set -euo pipefail
