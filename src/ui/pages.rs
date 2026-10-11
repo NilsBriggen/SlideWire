@@ -9,7 +9,7 @@ use super::widgets;
 use super::{App, PickPurpose, Tab};
 use crate::audio::AudioState;
 use crate::config::{self, Settings};
-use crate::engine::UiCmd;
+use crate::engine::{Event, Notice, UiCmd};
 use crate::profile::{ButtonAction, MediaKey, Profile, Target};
 
 impl App {
@@ -363,10 +363,11 @@ impl App {
     fn general_card(&mut self, ui: &mut egui::Ui, s: &mut Settings) {
         widgets::card(ui, icon::GEAR_SIX, "General", |ui| {
             let mut autostart = config::autostart_enabled();
-            if widgets::toggle(ui, &mut autostart, "Start when I log in").changed()
-                && let Err(e) = config::set_autostart(autostart)
-            {
-                self.flash(format!("Autostart: {e:#}"));
+            if widgets::toggle(ui, &mut autostart, "Start when I log in").changed() {
+                let events = self.events.clone();
+                config::set_autostart_in_background(autostart, move |e| {
+                    let _ = events.send(Event::Notice(Notice::Problem(format!("Autostart: {e}"))));
+                });
             }
             widgets::toggle(ui, &mut s.start_minimized, "Start minimised to the tray");
             widgets::toggle(ui, &mut s.auto_switch, "Switch to the matching profile when a controller is plugged in");

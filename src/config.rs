@@ -385,20 +385,45 @@ fn systemd_unit() -> bool {
     std::path::Path::new(SYSTEMD_UNIT).exists()
 }
 
-/// `systemctl --user is-enabled` is a process spawn, so its answer is kept.
+/// `systemctl --user is-enabled` is a process spawn, so it runs once in the
+/// background and its answer is kept.
 static SYSTEMD_ENABLED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+static SYSTEMD_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Whether we start with the session. Never blocks: the first call asks
+/// systemd in the background (and says no until it answered).
 pub fn autostart_enabled() -> bool {
     if systemd_unit() {
-        let mut cached = SYSTEMD_ENABLED.lock().unwrap();
-        return *cached.get_or_insert_with(|| {
-            std::process::Command::new("systemctl")
-                .args(["--user", "is-enabled", "--quiet", "slidewire.service"])
-                .status()
-                .is_ok_and(|s| s.success())
-        });
+        if let Some(on) = *SYSTEMD_ENABLED.lock().unwrap() {
+            return on;
+        }
+        if !SYSTEMD_ASKED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            std::thread::spawn(|| {
+                let on = std::process::Command::new("systemctl")
+                    .args(["--user", "is-enabled", "--quiet", "slidewire.service"])
+                    .status()
+                    .is_ok_and(|s| s.success());
+                *SYSTEMD_ENABLED.lock().unwrap() = Some(on);
+            });
+        }
+        return false;
     }
     autostart_path().is_some_and(|p| p.exists())
+}
+
+/// [`set_autostart`] on a worker thread; `report` gets the error, if any.
+pub fn set_autostart_in_background(on: bool, report: impl FnOnce(String) + Send + 'static) {
+    if systemd_unit() {
+        *SYSTEMD_ENABLED.lock().unwrap() = Some(on);
+    }
+    std::thread::spawn(move || {
+        if let Err(e) = set_autostart(on) {
+            if systemd_unit() {
+                *SYSTEMD_ENABLED.lock().unwrap() = Some(!on);
+            }
+            report(format!("{e:#}"));
+        }
+    });
 }
 
 pub fn set_autostart(on: bool) -> Result<()> {
@@ -412,7 +437,6 @@ pub fn set_autostart(on: bool) -> Result<()> {
             .args(["--user", if on { "enable" } else { "disable" }, "slidewire.service"])
             .status()
             .context("systemctl")?;
-        *SYSTEMD_ENABLED.lock().unwrap() = None;
         anyhow::ensure!(status.success(), "systemctl --user {} failed", if on { "enable" } else { "disable" });
         return Ok(());
     }

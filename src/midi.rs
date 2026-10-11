@@ -158,6 +158,28 @@ pub enum MidiIn {
 
 pub struct RawInput {
     stop: Arc<AtomicBool>,
+    /// Cleared when the reading thread ends (the device went away).
+    alive: Arc<AtomicBool>,
+}
+
+impl MidiIn {
+    /// False once a raw device's reader stopped, e.g. it was unplugged and
+    /// may come back under the same name.
+    pub fn is_alive(&self) -> bool {
+        match self {
+            MidiIn::Seq(_) => true,
+            MidiIn::Raw(r) => r.alive.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Clears a flag when dropped, however the thread holding it ends.
+struct ClearOnDrop(Arc<AtomicBool>);
+
+impl Drop for ClearOnDrop {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
 }
 
 impl Drop for RawInput {
@@ -222,7 +244,10 @@ fn connect_raw_input(card: u32, device: u32, mut callback: impl FnMut(&[u8]) + S
         .with_context(|| format!("opening {path}"))?;
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
+    let alive = Arc::new(AtomicBool::new(true));
+    let guard = ClearOnDrop(alive.clone());
     std::thread::Builder::new().name(format!("rawmidi {card},{device}")).spawn(move || {
+        let _guard = guard;
         let mut parser = StreamParser::default();
         let mut buf = [0u8; 256];
         while !stop2.load(Ordering::Relaxed) {
@@ -243,7 +268,7 @@ fn connect_raw_input(card: u32, device: u32, mut callback: impl FnMut(&[u8]) + S
             }
         }
     })?;
-    Ok(RawInput { stop })
+    Ok(RawInput { stop, alive })
 }
 
 /// Splits a raw MIDI byte stream into channel messages (handling running

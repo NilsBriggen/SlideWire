@@ -448,6 +448,12 @@ impl Engine {
             .unwrap_or((None, None));
         let want_pass = midi::find_port(&outs, &sh.store.settings.passthru).cloned();
 
+        // A raw device that was unplugged and came back under the same name:
+        // reopen it, and its output too.
+        if self.input.as_ref().is_some_and(|i| !i.is_alive()) {
+            self.input = None;
+            self.output = None;
+        }
         if want_in != sh.connected_in || (want_in.is_some() && self.input.is_none()) {
             self.input = None;
             if let Some(old) = sh.connected_in.take()

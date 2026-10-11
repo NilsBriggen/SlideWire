@@ -242,7 +242,8 @@ if (workspace.windowActivated) {{
 }}
 "#
     );
-    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    // Not /tmp: another user could put a script of their own there first.
+    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).context("XDG_RUNTIME_DIR isn't set")?;
     let path = dir.join("slidewire-focus.js");
     std::fs::write(&path, script)?;
 
@@ -304,9 +305,38 @@ fn mpris_names(conn: &Connection) -> Result<Vec<String>> {
     Ok(names.into_iter().filter(|n| n.starts_with("org.mpris.MediaPlayer2.")).collect())
 }
 
+/// One session connection for our outgoing calls. Calls time out, so a
+/// hung media player or shell can't block a thread forever.
+pub fn client() -> Result<Connection> {
+    static CONN: std::sync::Mutex<Option<Connection>> = std::sync::Mutex::new(None);
+    let mut c = CONN.lock().unwrap();
+    if let Some(conn) = &*c {
+        return Ok(conn.clone());
+    }
+    let conn = zbus::blocking::connection::Builder::session()?.method_timeout(Duration::from_secs(2)).build()?;
+    *c = Some(conn.clone());
+    Ok(conn)
+}
+
 /// Short names of the running media players ("spotify", "firefox", ...).
+/// For the UI: answers at once from a list refreshed in the background.
 pub fn mpris_players() -> Vec<String> {
-    let Ok(conn) = Connection::session() else { return Vec::new() };
+    static CACHE: std::sync::Mutex<(Option<std::time::Instant>, Vec<String>, bool)> =
+        std::sync::Mutex::new((None, Vec::new(), false));
+    let mut cache = CACHE.lock().unwrap();
+    let stale = cache.0.is_none_or(|t| t.elapsed() > Duration::from_secs(2));
+    if stale && !cache.2 {
+        cache.2 = true;
+        std::thread::spawn(|| {
+            let players = list_players();
+            *CACHE.lock().unwrap() = (Some(std::time::Instant::now()), players, false);
+        });
+    }
+    cache.1.clone()
+}
+
+fn list_players() -> Vec<String> {
+    let Ok(conn) = client() else { return Vec::new() };
     let mut names: Vec<String> = mpris_names(&conn)
         .unwrap_or_default()
         .iter()
@@ -324,7 +354,7 @@ pub fn mpris_players() -> Vec<String> {
 /// Send a media key to `player` (part of its name), or to whichever player
 /// is playing when that's empty.
 pub fn media(key: MediaKey, player: &str) -> Result<()> {
-    let conn = Connection::session()?;
+    let conn = client()?;
     let want = player.trim().to_lowercase();
     let players: Vec<String> =
         mpris_names(&conn)?.into_iter().filter(|n| want.is_empty() || n.to_lowercase().contains(&want)).collect();
@@ -377,6 +407,7 @@ pub fn media(key: MediaKey, player: &str) -> Result<()> {
 }
 
 pub struct Osd {
+    /// Bounded: if the shell hangs, pop-ups are dropped rather than queued.
     tx: Sender<(String, i32, String)>,
 }
 
@@ -419,7 +450,7 @@ impl Osd {
     /// Plasma's volume OSD, or a notification on other desktops. Requests
     /// are coalesced so fast fader moves don't queue up.
     pub fn spawn() -> Osd {
-        let (tx, rx) = crossbeam_channel::unbounded::<(String, i32, String)>();
+        let (tx, rx) = crossbeam_channel::bounded::<(String, i32, String)>(8);
         std::thread::Builder::new()
             .name("osd".into())
             .spawn(move || {
@@ -428,7 +459,7 @@ impl Osd {
                     while rx.recv().is_ok() {}
                     return;
                 }
-                let Ok(conn) = Connection::session() else { return };
+                let Ok(conn) = client() else { return };
                 let plasma = has_owner(&conn, "org.kde.plasmashell");
                 // Elsewhere: a desktop notification that replaces itself.
                 let mut note_id = 0u32;
@@ -466,11 +497,11 @@ impl Osd {
     }
 
     pub fn show(&self, icon: &str, percent: i32, text: &str) {
-        let _ = self.tx.send((icon.to_string(), percent, text.to_string()));
+        let _ = self.tx.try_send((icon.to_string(), percent, text.to_string()));
     }
 
     /// A text-only pop-up (bank and scene changes).
     pub fn show_text(&self, icon: &str, text: &str) {
-        let _ = self.tx.send((icon.to_string(), -1, text.to_string()));
+        let _ = self.tx.try_send((icon.to_string(), -1, text.to_string()));
     }
 }
