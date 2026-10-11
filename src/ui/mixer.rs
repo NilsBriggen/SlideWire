@@ -217,6 +217,7 @@ impl App {
                 self.edit_profile(|p| {
                     p.scenes.shift_remove(&name);
                 });
+                self.toast(icon::TRASH, format!("Deleted scene \"{name}\""), None, Some(super::ToastUndo::Edit));
             }
             ui.separator();
             ui.horizontal(|ui| {
@@ -250,6 +251,10 @@ impl App {
             painter.rect_filled(band, 1.5, theme::strip_color(Some(i)));
         }
         strip_header(&painter, head.shrink2(vec2(8.0, 0.0)), c.no, label.map(String::as_str));
+        if self.selected_channel == Some(c.no) {
+            // Picked with the number keys: arrows and M act on it.
+            painter.rect_stroke(rect.expand(2.0), 10.0, Stroke::new(2.0, pal().accent), StrokeKind::Outside);
+        }
         let split = head.bottom() + CHANNEL_KNOB_H;
         let knob_zone =
             egui::Rect::from_min_max(egui::pos2(rect.left(), head.bottom()), egui::pos2(rect.right(), split));
@@ -591,6 +596,9 @@ impl App {
                     a.targets.remove(i);
                 }
             });
+            let what = s.targets[i].label();
+            let strip = s.label.as_deref().unwrap_or(&s.name);
+            self.toast(icon::TRASH, format!("Removed {what} from {strip}"), None, Some(super::ToastUndo::Edit));
         }
         ui.separator();
         self.target_menu(ui, &s.id, audio);
@@ -700,6 +708,8 @@ impl App {
                 }
             });
             self.rename = None;
+            let strip = s.label.as_deref().unwrap_or(&s.name).to_string();
+            self.toast(icon::ERASER, format!("Cleared {strip}"), None, Some(super::ToastUndo::Edit));
             ui.close();
         }
         ui.separator();
@@ -822,12 +832,15 @@ impl App {
         let apps = group_streams(&audio.apps);
         let inputs = group_streams(&audio.app_inputs);
         let total = apps.len() + inputs.len() + audio.sinks.len() + audio.sources.len();
-        if total > 8 || !self.source_filter.is_empty() {
-            ui.add(
+        if total > 8 || !self.source_filter.is_empty() || self.want_filter {
+            let r = ui.add(
                 egui::TextEdit::singleline(&mut self.source_filter)
                     .hint_text(format!("{}  Filter", icon::MAGNIFYING_GLASS))
                     .desired_width(f32::INFINITY),
             );
+            if std::mem::take(&mut self.want_filter) {
+                r.request_focus();
+            }
             ui.add_space(4.0);
         }
         let filter = self.source_filter.to_lowercase();

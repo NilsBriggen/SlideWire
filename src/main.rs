@@ -151,6 +151,7 @@ fn main() {
         led_state: Default::default(),
         last_midi: None,
         source_peaks: Default::default(),
+        notices: Vec::new(),
     }));
     for w in warnings {
         shared.lock().unwrap().warn(w);

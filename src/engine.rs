@@ -48,6 +48,8 @@ pub enum UiCmd {
     /// Save the current strips under a name.
     SaveScene(String),
     RecallScene(String),
+    /// Go back to how things were before the last scene recall.
+    UndoScene,
 }
 
 pub enum Event {
@@ -139,6 +141,18 @@ pub struct Shared {
     pub last_midi: Option<Instant>,
     /// Peak levels of every metered stream/device (for the sources panel).
     pub source_peaks: HashMap<MeterKey, f32>,
+    /// Things worth a pop-up in the window; the UI takes them.
+    pub notices: Vec<Notice>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Notice {
+    Connected(String),
+    Disconnected(String),
+    ProfileSwitched(String),
+    Bank(usize),
+    /// A scene was recalled; it can be undone.
+    SceneRecalled(String),
 }
 
 impl Shared {
@@ -150,6 +164,14 @@ impl Shared {
     }
     pub fn log(&mut self, msg: impl Into<String>) {
         self.push_log(false, msg.into());
+    }
+
+    /// Pop up a notice in the window, if it's open.
+    pub fn notify(&mut self, n: Notice) {
+        if self.ui_visible {
+            self.notices.push(n);
+            self.repaint();
+        }
     }
 
     /// Log something that went wrong; shown in amber.
@@ -215,6 +237,8 @@ pub struct Engine {
     /// Port scans scheduled after a hotplug event.
     rescan_at: Option<Instant>,
     rescan_follow_up: Option<Instant>,
+    /// Volumes and mutes from before the last scene recall.
+    scene_undo: Option<crate::profile::Scene>,
     show_window: Sender<()>,
 }
 
@@ -247,6 +271,7 @@ impl Engine {
             waiting: HashMap::new(),
             rescan_at: None,
             rescan_follow_up: None,
+            scene_undo: None,
             show_window,
         }
     }
@@ -345,6 +370,7 @@ impl Engine {
                     sh.store.settings.active_profile = Some(id);
                     let _ = sh.store.save_settings();
                     sh.log(format!("Switched to profile \"{name}\" (device connected)"));
+                    sh.notify(Notice::ProfileSwitched(name));
                 }
             }
         }
@@ -362,7 +388,11 @@ impl Engine {
 
         if want_in != sh.connected_in || (want_in.is_some() && self.input.is_none()) {
             self.input = None;
-            sh.connected_in = None;
+            if let Some(old) = sh.connected_in.take()
+                && want_in.is_none()
+            {
+                sh.notify(Notice::Disconnected(midi::display_name(&old)));
+            }
             if want_in.is_none() {
                 sh.midi_error = None;
             }
@@ -376,6 +406,7 @@ impl Engine {
                         sh.connected_in = Some(port.clone());
                         sh.midi_error = None;
                         sh.log(format!("Connected input {port}"));
+                        sh.notify(Notice::Connected(midi::display_name(port)));
                     }
                     Err(e) => {
                         let msg = format!("{e:#}");
@@ -646,6 +677,10 @@ impl Engine {
         let _ = sh.store.save_profile(&id);
         let osd = sh.store.settings.osd;
         sh.log(format!("Bank {}", new + 1));
+        if step != 0 {
+            // From a button on the controller; the window shows bank tabs anyway.
+            sh.notify(Notice::Bank(new));
+        }
         drop(sh);
         self.positions.clear();
         self.waiting.clear();
@@ -681,19 +716,25 @@ impl Engine {
         }
     }
 
-    fn save_scene(&mut self, name: &str) {
-        let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
+    /// The current volumes and mutes of every strip that controls something.
+    fn snapshot(&mut self, profile: &Profile) -> crate::profile::Scene {
         let mut scene = crate::profile::Scene { bank: profile.bank, ..Default::default() };
         for gid in profile.groups.keys() {
-            let (targets, _) = self.group_settings(&profile, gid);
-            let res = self.resolve(&profile, &targets);
+            let (targets, _) = self.group_settings(profile, gid);
+            let res = self.resolve(profile, &targets);
             if res.is_empty() {
                 continue;
             }
-            let position = self.group_position(&profile, gid);
+            let position = self.group_position(profile, gid);
             let mute = res.iter().all(|r| r.mute);
             scene.strips.insert(gid.clone(), crate::profile::SceneStrip { position, mute });
         }
+        scene
+    }
+
+    fn save_scene(&mut self, name: &str) {
+        let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
+        let scene = self.snapshot(&profile);
         let mut sh = self.shared.lock().unwrap();
         let Some(id) = sh.active_id() else { return };
         sh.store.profiles.get_mut(&id).unwrap().scenes.insert(name.to_string(), scene);
@@ -707,6 +748,19 @@ impl Engine {
             self.shared.lock().unwrap().warn(format!("No scene called \"{name}\""));
             return;
         };
+        self.scene_undo = Some(self.snapshot(&profile));
+        self.apply_scene(&scene);
+        let mut sh = self.shared.lock().unwrap();
+        sh.log(format!("Recalled scene \"{name}\""));
+        sh.notify(Notice::SceneRecalled(name.to_string()));
+        drop(sh);
+        if self.shared.lock().unwrap().store.settings.osd {
+            self.osd.show_text("view-media-playlist", &format!("Scene: {name}"));
+        }
+    }
+
+    fn apply_scene(&mut self, scene: &crate::profile::Scene) {
+        let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
         if scene.bank != profile.bank && scene.bank < profile.bank_count() {
             self.set_bank(Some(scene.bank), 0);
         }
@@ -723,9 +777,6 @@ impl Engine {
             }
         }
         self.mark_pickup();
-        if self.shared.lock().unwrap().store.settings.osd {
-            self.osd.show_text("view-media-playlist", &format!("Scene: {name}"));
-        }
     }
 
     fn cycle_default(&mut self, kind: Kind, names: &[String]) {
@@ -835,6 +886,11 @@ impl Engine {
             UiCmd::MoveStream(kind, index, device) => self.audio.send(AudioCmd::Move(kind, index, device)),
             UiCmd::SaveScene(name) => self.save_scene(&name),
             UiCmd::RecallScene(name) => self.recall_scene(&name),
+            UiCmd::UndoScene => {
+                if let Some(scene) = self.scene_undo.take() {
+                    self.apply_scene(&scene);
+                }
+            }
             UiCmd::MuteAll => {
                 let sh = self.shared.lock().unwrap();
                 let cmds: Vec<AudioCmd> =

@@ -2,12 +2,14 @@
 
 mod controller;
 mod diagram;
+mod history;
 mod icons;
 mod mixer;
 mod pages;
 mod theme;
 mod widgets;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -17,7 +19,7 @@ use crossbeam_channel::{Receiver, Sender};
 use eframe::egui::{self, Color32, RichText, Sense, Stroke, Vec2, pos2, vec2};
 
 use crate::WindowCmd;
-use crate::engine::{Event, SharedRef, UiCmd};
+use crate::engine::{Event, Notice, SharedRef, UiCmd};
 use crate::profile::Profile;
 use theme::{icon, *};
 
@@ -36,6 +38,24 @@ enum PickPurpose {
     Import,
     /// Export the profile with this id.
     Export(String),
+}
+
+/// A short message in the bottom-right corner.
+pub(super) struct Toast {
+    icon: &'static str,
+    text: String,
+    /// None: the accent colour.
+    color: Option<Color32>,
+    born: Instant,
+    undo: Option<ToastUndo>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum ToastUndo {
+    /// Undo the last profile edit.
+    Edit,
+    /// Undo the last scene recall.
+    Scene,
 }
 
 /// Something destructive waiting for a yes.
@@ -62,7 +82,13 @@ pub struct App {
     custom_regex: bool,
     import_path: String,
     picked: Arc<Mutex<Option<(PickPurpose, PathBuf)>>>,
-    status: Option<(String, Instant)>,
+    toasts: Vec<Toast>,
+    history: RefCell<history::History>,
+    show_shortcuts: bool,
+    /// Ctrl+F asked for the sources filter.
+    want_filter: bool,
+    /// Channel strip picked with the number keys.
+    selected_channel: Option<u32>,
     expanded_control: Option<String>,
     control_search: String,
     scene_name: String,
@@ -120,7 +146,11 @@ impl App {
             custom_regex: false,
             import_path: String::new(),
             picked: Arc::default(),
-            status: None,
+            toasts: Vec::new(),
+            history: RefCell::default(),
+            show_shortcuts: false,
+            want_filter: false,
+            selected_channel: None,
             expanded_control: None,
             control_search: String::new(),
             scene_name: String::new(),
@@ -143,19 +173,217 @@ impl App {
     }
 
     fn flash(&mut self, msg: impl Into<String>) {
-        self.status = Some((msg.into(), Instant::now()));
+        self.toast(icon::INFO, msg, None, None);
+    }
+
+    fn toast(&mut self, icon: &'static str, text: impl Into<String>, color: Option<Color32>, undo: Option<ToastUndo>) {
+        let text = text.into();
+        // The same message again just restarts its timer.
+        self.toasts.retain(|t| t.text != text);
+        self.toasts.push(Toast { icon, text, color, born: Instant::now(), undo });
+        if self.toasts.len() > 4 {
+            self.toasts.remove(0);
+        }
     }
 
     /// Run `f` on the active profile, then let the engine save and refresh.
+    /// The edit can be undone.
     fn edit_profile(&self, f: impl FnOnce(&mut Profile)) {
         let mut sh = self.shared.lock().unwrap();
         if let Some(id) = sh.active_id()
             && let Some(p) = sh.store.profiles.get_mut(&id)
         {
+            let before = p.clone();
             f(p);
+            let json = |p: &Profile| serde_json::to_string(p).unwrap_or_default();
+            if json(&before) != json(p) {
+                self.history.borrow_mut().record(&id, &before, Instant::now());
+            }
         }
         drop(sh);
         self.send(UiCmd::ProfileEdited);
+    }
+
+    fn undo(&mut self, redo: bool) {
+        let shared = self.shared.clone();
+        let current = |id: &str| shared.lock().unwrap().store.profiles.get(id).cloned();
+        let step = if redo { self.history.borrow_mut().redo(current) } else { self.history.borrow_mut().undo(current) };
+        let Some((id, p)) = step else {
+            self.flash(if redo { "Nothing to redo" } else { "Nothing to undo" });
+            return;
+        };
+        let mut sh = self.shared.lock().unwrap();
+        sh.store.profiles.insert(id.clone(), p);
+        let _ = sh.store.save_profile(&id);
+        drop(sh);
+        self.send(UiCmd::ProfileEdited);
+        self.toast(icon::ARROW_COUNTER_CLOCKWISE, if redo { "Redone" } else { "Undone" }, None, None);
+    }
+
+    /// Turn the engine's notices into toasts.
+    fn take_notices(&mut self) {
+        let notices = std::mem::take(&mut self.shared.lock().unwrap().notices);
+        for n in notices {
+            match n {
+                Notice::Connected(d) => self.toast(icon::PLUGS_CONNECTED, format!("{d} connected"), Some(RUN), None),
+                Notice::Disconnected(d) => self.toast(icon::PLUGS, format!("{d} disconnected"), Some(ASSIGN), None),
+                Notice::ProfileSwitched(p) => {
+                    self.toast(icon::FOLDER_SIMPLE, format!("Switched to \"{p}\""), None, None)
+                }
+                Notice::Bank(b) => self.toast(icon::STACK, format!("Bank {}", b + 1), None, None),
+                Notice::SceneRecalled(name) => self.toast(
+                    icon::BOOKMARKS_SIMPLE,
+                    format!("Scene \"{name}\" recalled"),
+                    None,
+                    Some(ToastUndo::Scene),
+                ),
+            }
+        }
+    }
+
+    fn draw_toasts(&mut self, ctx: &egui::Context) {
+        let life = |t: &Toast| Duration::from_secs(if t.undo.is_some() { 7 } else { 4 });
+        self.toasts.retain(|t| t.born.elapsed() < life(t));
+        if self.toasts.is_empty() {
+            return;
+        }
+        let mut undo = None;
+        let mut close = None;
+        egui::Area::new(egui::Id::new("toasts"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-16.0, -16.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = SP_S;
+                for (i, t) in self.toasts.iter().enumerate() {
+                    let age = t.born.elapsed().as_secs_f32();
+                    let left = life(t).as_secs_f32() - age;
+                    // Fade in quickly, fade out over the last 0.3 s.
+                    let fade = (age / 0.15).min(1.0).min(left / 0.3).clamp(0.0, 1.0);
+                    ui.scope(|ui| {
+                        ui.multiply_opacity(fade);
+                        egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
+                            ui.set_max_width(360.0);
+                            ui.horizontal(|ui| {
+                                let color = t.color.unwrap_or(pal().accent);
+                                ui.label(RichText::new(t.icon).size(18.0).color(color));
+                                ui.label(&t.text);
+                                if let Some(u) = t.undo
+                                    && ui.button(RichText::new("Undo").color(pal().accent)).clicked()
+                                {
+                                    undo = Some((i, u));
+                                }
+                                if ui.small_button(icon::X).clicked() {
+                                    close = Some(i);
+                                }
+                            });
+                        });
+                    });
+                }
+            });
+        if let Some((i, u)) = undo {
+            self.toasts.remove(i);
+            match u {
+                ToastUndo::Edit => self.undo(false),
+                ToastUndo::Scene => self.send(UiCmd::UndoScene),
+            }
+        } else if let Some(i) = close {
+            self.toasts.remove(i);
+        }
+        ctx.request_repaint_after(Duration::from_millis(50));
+    }
+
+    /// Keyboard shortcuts that work anywhere in the window.
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let typing = ctx.egui_wants_keyboard_input();
+        let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
+        if !typing {
+            if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || pressed(Modifiers::COMMAND, Key::Y) {
+                self.undo(true);
+            } else if pressed(Modifiers::COMMAND, Key::Z) {
+                self.undo(false);
+            }
+        }
+        for (k, tab) in [
+            (Key::Num1, Tab::Mixer),
+            (Key::Num2, Tab::Controller),
+            (Key::Num3, Tab::Buttons),
+            (Key::Num4, Tab::Profiles),
+            (Key::Num5, Tab::Settings),
+            (Key::Num6, Tab::Log),
+        ] {
+            if pressed(Modifiers::COMMAND, k) {
+                self.tab = tab;
+            }
+        }
+        if pressed(Modifiers::COMMAND, Key::F) {
+            self.tab = Tab::Mixer;
+            self.show_sources = true;
+            self.want_filter = true;
+        }
+        if pressed(Modifiers::NONE, Key::F1) {
+            self.show_shortcuts = !self.show_shortcuts;
+        }
+        if typing || self.tab != Tab::Mixer {
+            return;
+        }
+        // Mixer: number keys pick a channel, arrows move its fader, M mutes it.
+        let digits =
+            [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
+        for (n, k) in digits.iter().enumerate() {
+            if pressed(Modifiers::NONE, *k) {
+                let n = n as u32 + 1;
+                self.selected_channel = if self.selected_channel == Some(n) { None } else { Some(n) };
+            }
+        }
+        if pressed(Modifiers::NONE, Key::Escape) {
+            self.selected_channel = None;
+        }
+        let Some(n) = self.selected_channel else { return };
+        let strip = {
+            let sh = self.shared.lock().unwrap();
+            sh.strips.iter().find(|s| !s.knob && s.name.rsplit(' ').next() == Some(&n.to_string())).cloned()
+        };
+        let Some(s) = strip else { return };
+        let step = if ctx.input(|i| i.modifiers.shift) { 0.01 } else { 0.05 };
+        for (k, d) in [(Key::ArrowUp, step), (Key::ArrowDown, -step)] {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k) || i.consume_key(Modifiers::SHIFT, k)) {
+                self.send(UiCmd::SetGroupPosition(s.id.clone(), (s.position + d).clamp(0.0, 1.0)));
+            }
+        }
+        if pressed(Modifiers::NONE, Key::M) {
+            self.send(UiCmd::ToggleGroupMute(s.id.clone()));
+        }
+    }
+
+    fn shortcuts_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_shortcuts;
+        egui::Window::new("Keyboard shortcuts")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .frame(egui::Frame::window(&ctx.global_style()).inner_margin(18))
+            .show(ctx, |ui| {
+                egui::Grid::new("keys").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
+                    for (keys, what) in [
+                        ("Ctrl+1 … Ctrl+6", "Switch pages"),
+                        ("1 … 9", "Pick a channel strip (Mixer)"),
+                        ("↑ / ↓", "Move its fader 5% (Shift: 1%)"),
+                        ("M", "Mute it"),
+                        ("Esc", "Let go of the strip"),
+                        ("Ctrl+F", "Filter the sources"),
+                        ("Ctrl+Z", "Undo a change to assignments or the profile"),
+                        ("Ctrl+Shift+Z", "Redo"),
+                        ("F1", "This list"),
+                    ] {
+                        ui.label(RichText::new(keys).font(mono(12.5)).color(pal().accent));
+                        ui.label(what);
+                        ui.end_row();
+                    }
+                });
+            });
+        self.show_shortcuts = open;
     }
 
     fn pick_file(&self, purpose: PickPurpose) {
@@ -276,12 +504,6 @@ impl App {
                 if !focus.class.is_empty() {
                     widgets::pill(ui, None, &format!("{}  {}", icon::CROSSHAIR, focus.class))
                         .on_hover_text("Focused app");
-                }
-                if let Some((s, at)) = &self.status
-                    && at.elapsed() < Duration::from_secs(6)
-                {
-                    ui.label(RichText::new(s).color(pal().accent));
-                    ui.ctx().request_repaint_after(Duration::from_secs(1));
                 }
             });
         });
@@ -417,6 +639,7 @@ impl eframe::App for App {
         self.handle_window_cmds(&ctx);
         let settings = self.shared.lock().unwrap().store.settings.clone();
         theme::sync(&ctx, &settings);
+        self.shortcuts(&ctx);
 
         egui::Panel::top("top")
             .frame(
@@ -448,6 +671,9 @@ impl eframe::App for App {
             });
         self.doctor_window(&ctx);
         self.confirm_dialog(&ctx);
+        self.shortcuts_window(&ctx);
+        self.take_notices();
+        self.draw_toasts(&ctx);
 
         // Everything that moves asks for its own frames (engine events, meter
         // peaks, blinks); this slow floor only catches anything that didn't.
