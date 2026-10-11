@@ -107,6 +107,9 @@ impl App {
         // Measured outside the scroll area, which would report its scrollbars' space too.
         let avail = ui.available_width();
         let avail_h = ui.available_height();
+        // Strips are sized to the width measured above; floating scrollbars
+        // don't take any of it away.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::floating();
         egui::ScrollArea::both().id_salt("console").auto_shrink([false, false]).show(ui, |ui| {
             if !channels.is_empty() {
                 // The master strip only when it fits next to full-size channels.
@@ -600,6 +603,7 @@ impl App {
         ui.set_width(300.0);
         let title = s.label.as_deref().unwrap_or(&s.name);
         ui.label(RichText::new(format!("{}  {title}", icon::TARGET)).font(semibold(14.0)));
+        section_label(ui, "Controls");
         if s.targets.is_empty() {
             widgets::hint(ui, "Nothing assigned yet.");
         }
@@ -628,9 +632,9 @@ impl App {
             let strip = s.label.as_deref().unwrap_or(&s.name);
             self.toast(icon::TRASH, format!("Removed {what} from {strip}"), None, Some(super::ToastUndo::Edit));
         }
-        ui.separator();
-        self.target_menu(ui, &s.id, audio);
-        ui.separator();
+        ui.menu_button(format!("{}  Add…", icon::PLUS), |ui| self.target_menu(ui, &s.id, audio));
+        section_label(ui, "Range");
+        self.range_menu(ui, &s.id);
         self.identity_menu(ui, s, audio);
         self.relearn_menu(ui, &s.id);
         ui.horizontal(|ui| {
@@ -678,9 +682,10 @@ impl App {
         });
     }
 
-    /// Name, colour and icon of the strip, and clearing it.
+    /// Name, colour and icon of the strip, ducking, and clearing it.
     fn identity_menu(&mut self, ui: &mut egui::Ui, s: &StripView, audio: &AudioState) {
         let gid = s.id.clone();
+        section_label(ui, "Look");
         if self.rename.as_ref().is_none_or(|(id, _)| *id != gid) {
             self.rename = Some((gid.clone(), s.label.clone().unwrap_or_default()));
         }
@@ -759,6 +764,7 @@ impl App {
             });
         });
         // Ducking: this strip turns the other apps down while it plays.
+        section_label(ui, "Ducking");
         let duck = {
             let sh = self.shared.lock().unwrap();
             sh.active().and_then(|p| p.current().get(&gid)).and_then(|a| a.duck)
@@ -892,7 +898,10 @@ impl App {
                 ui.close();
             }
         });
-        // The fader's range and curve: e.g. a mic that never goes below 40%.
+    }
+
+    /// The fader's range and curve: e.g. a mic that never goes below 40%.
+    fn range_menu(&mut self, ui: &mut egui::Ui, gid: &str) {
         let (before, global_curve) = {
             let sh = self.shared.lock().unwrap();
             let a = sh.active().and_then(|p| p.current().get(gid)).cloned().unwrap_or_default();
@@ -1380,6 +1389,12 @@ pub(super) fn target_glyph(t: &Target) -> &'static str {
 /// "47%", "MUTE", or the volume in amber with an arrow while the hardware
 /// control waits to pick it up.
 /// "Firefox ×2 + Spotify": names joined, repeats counted.
+/// A small heading inside a menu.
+fn section_label(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(6.0);
+    ui.label(RichText::new(text.to_uppercase()).size(11.0).strong().color(pal().text_dim));
+}
+
 /// A strip's name for screen readers: "Fader 1, Music (Spotify)".
 fn strip_name(s: &StripView) -> String {
     let mut name = s.name.clone();

@@ -583,7 +583,8 @@ pub fn text_field(ui: &mut Ui, text: &mut String, hint_text: &str, icon: Option<
         .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
             // Icon first even inside right-to-left rows.
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            let layout = egui::Layout::left_to_right(egui::Align::Center);
+            ui.allocate_ui_with_layout(vec2(width - 16.0, ui.spacing().interact_size.y - 8.0), layout, |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if let Some(ic) = icon {
                     ui.label(egui::RichText::new(ic).color(p.text_dim));

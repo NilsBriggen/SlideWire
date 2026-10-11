@@ -277,58 +277,62 @@ impl App {
                         if is_active { pal().accent } else { pal().border },
                     ))
                     .corner_radius(10)
-                    .inner_margin(egui::Margin::symmetric(14, 10))
+                    .inner_margin(egui::Margin::symmetric(14, 12))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            let led = if connected { RUN } else { pal().text_faint };
-                            let (r, _) = ui.allocate_exact_size(egui::Vec2::splat(12.0), egui::Sense::hover());
-                            if connected {
-                                widgets::glow(
-                                    ui.painter(),
-                                    egui::Rect::from_center_size(r.center(), egui::Vec2::splat(7.0)),
-                                    3.0,
-                                    led.gamma_multiply(0.6),
-                                    8.0,
-                                );
-                            }
-                            ui.painter().circle_filled(r.center(), 5.0, led);
+                            profile_thumb(ui, p, connected);
+                            ui.add_space(4.0);
                             ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 1.0;
+                                ui.spacing_mut().item_spacing.y = 2.0;
                                 ui.horizontal(|ui| {
                                     self.profile_name(ui, id, &p.name);
                                     if is_active {
-                                        widgets::chip(ui, "ACTIVE", pal().accent);
+                                        widgets::pill(ui, Some(pal().accent), "In use");
                                     }
                                 });
-                                let status = if connected { "connected" } else { "not connected" };
-                                widgets::hint(
-                                    ui,
-                                    &format!(
-                                        "{} · {status} · {} controls · {} groups",
-                                        if p.input.is_empty() { "no port" } else { &p.input },
-                                        p.controls.len(),
-                                        p.groups.len()
-                                    ),
-                                );
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if widgets::icon_framed(ui, icon::TRASH, "Delete").clicked() {
-                                    action = Some(("delete", id.clone()));
-                                }
-                                if ui
-                                    .button(icon::EXPORT)
-                                    .on_hover_text("Export in the MIDI Mixer spec.json format")
-                                    .clicked()
-                                {
-                                    action = Some(("export", id.clone()));
-                                }
-                                if widgets::icon_framed(ui, icon::COPY, "Duplicate").clicked() {
-                                    action = Some(("duplicate", id.clone()));
-                                }
-                                if !is_active && widgets::icon_button(ui, icon::CHECK, "Use").clicked() {
-                                    action = Some(("activate", id.clone()));
-                                }
+                                let (led, status) =
+                                    if connected { (RUN, "connected") } else { (pal().text_faint, "not connected") };
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 6.0;
+                                    let (r, _) = ui.allocate_exact_size(egui::Vec2::splat(10.0), egui::Sense::hover());
+                                    ui.painter().circle_filled(r.center(), 4.0, led);
+                                    widgets::hint(
+                                        ui,
+                                        &format!(
+                                            "{} · {status} · {} controls · {} strips",
+                                            if p.input.is_empty() { "no port set" } else { &p.input },
+                                            p.controls.len(),
+                                            p.groups.len()
+                                        ),
+                                    );
+                                });
+                                ui.horizontal(|ui| {
+                                    if !is_active
+                                        && ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new(format!("{}  Use", icon::CHECK)).strong(),
+                                                )
+                                                .fill(pal().accent_bg),
+                                            )
+                                            .clicked()
+                                    {
+                                        action = Some(("activate", id.clone()));
+                                    }
+                                    if widgets::icon_button(ui, icon::COPY, "Duplicate").clicked() {
+                                        action = Some(("duplicate", id.clone()));
+                                    }
+                                    if widgets::icon_button(ui, icon::EXPORT, "Export")
+                                        .on_hover_text("Save it as a file (the MIDI Mixer spec.json format)")
+                                        .clicked()
+                                    {
+                                        action = Some(("export", id.clone()));
+                                    }
+                                    if widgets::icon_button(ui, icon::TRASH, "Delete").clicked() {
+                                        action = Some(("delete", id.clone()));
+                                    }
+                                });
                             });
                         });
                     });
@@ -683,6 +687,26 @@ impl App {
                     }
                 });
             });
+    }
+}
+
+/// A small drawing of a profile's controller: one fader per strip (up to
+/// 8), lit when it's connected.
+fn profile_thumb(ui: &mut egui::Ui, p: &Profile, connected: bool) {
+    let (rect, _) = ui.allocate_exact_size(vec2(96.0, 60.0), egui::Sense::hover());
+    let painter = ui.painter();
+    widgets::bevel_panel(painter, rect, 6, theme::hw::BODY_TOP, theme::hw::BODY_BOTTOM);
+    let strips = p.groups.values().filter(|g| !g.faders.is_empty() && !g.name.to_lowercase().starts_with("knob"));
+    let n = strips.count().clamp(1, 8);
+    let area = rect.shrink2(vec2(10.0, 9.0));
+    let step = area.width() / n as f32;
+    for i in 0..n {
+        let x = area.left() + step * (i as f32 + 0.5);
+        painter.line_segment([egui::pos2(x, area.top()), egui::pos2(x, area.bottom())], Stroke::new(2.0, SLOT));
+        // Caps at different heights, like a mix in progress.
+        let y = area.top() + area.height() * (0.25 + 0.5 * (((i * 7) % 5) as f32 / 4.0));
+        let cap = egui::Rect::from_center_size(egui::pos2(x, y), vec2((step * 0.6).min(9.0), 4.0));
+        painter.rect_filled(cap, 1.0, if connected { pal().accent } else { theme::hw::TEXT_DIM });
     }
 }
 
