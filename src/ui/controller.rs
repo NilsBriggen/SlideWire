@@ -31,6 +31,12 @@ impl App {
         let mut deleted: Option<String> = None;
         let mut test: Option<String> = None;
 
+        widgets::page_header(
+            ui,
+            "Controller",
+            Some("Touch a control on your device to see it light up. Click one to edit it."),
+            |_| {},
+        );
         egui::ScrollArea::vertical().id_salt("controller").auto_shrink([false, false]).show(ui, |ui| {
             // Live diagram.
             let live = LiveState {
@@ -44,7 +50,6 @@ impl App {
                 self.expanded_control = if self.expanded_control.as_deref() == Some(&id) { None } else { Some(id) };
                 scroll_to = self.expanded_control.clone();
             }
-            widgets::hint(ui, "Touch a control on your device to see it light up. Click one to edit it below.");
             ui.add_space(10.0);
 
             widgets::card(ui, icon::PLUGS_CONNECTED, "Device", |ui| {
@@ -73,14 +78,7 @@ impl App {
                     widgets::hint(ui, "New controls start listening: move the control on your device.");
                 });
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(icon::MAGNIFYING_GLASS).color(pal().text_dim));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.control_search)
-                            .hint_text("Filter controls")
-                            .desired_width(220.0),
-                    );
-                });
+                widgets::text_field(ui, &mut self.control_search, "Filter controls", Some(icon::MAGNIFYING_GLASS), 260.0);
                 ui.add_space(4.0);
                 let search = self.control_search.trim().to_lowercase();
                 let mut remove = None;
@@ -338,7 +336,7 @@ fn role_color(r: Role) -> egui::Color32 {
 fn edit_control(ui: &mut egui::Ui, id: &str, c: &mut Control) {
     egui::Grid::new(("edit", id)).num_columns(2).spacing([14.0, 6.0]).show(ui, |ui| {
         ui.label("Type");
-        egui::ComboBox::from_id_salt(("kind", id)).selected_text(c.kind.label()).width(140.0).show_ui(ui, |ui| {
+        widgets::combo(("kind", id)).selected_text(c.kind.label()).width(140.0).show_ui(ui, |ui| {
             for k in ControlKind::ALL {
                 ui.selectable_value(&mut c.kind, k, k.label());
             }
@@ -346,7 +344,7 @@ fn edit_control(ui: &mut egui::Ui, id: &str, c: &mut Control) {
         ui.end_row();
         ui.label("Message");
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt(("cmd", id)).selected_text(c.command.label()).width(110.0).show_ui(ui, |ui| {
+            widgets::combo(("cmd", id)).selected_text(c.command.label()).width(110.0).show_ui(ui, |ui| {
                 for k in Command::ALL {
                     ui.selectable_value(&mut c.command, k, k.label());
                 }
@@ -427,7 +425,7 @@ fn edit_control(ui: &mut egui::Ui, id: &str, c: &mut Control) {
 pub(super) fn port_combo(ui: &mut egui::Ui, id: &str, value: &mut String, ports: &[String]) {
     ui.horizontal(|ui| {
         ui.add(egui::TextEdit::singleline(value).desired_width(220.0).hint_text("port name (part of it is enough)"));
-        egui::ComboBox::from_id_salt(id).selected_text("Pick").width(64.0).show_ui(ui, |ui| {
+        widgets::combo(id).selected_text("Pick").width(64.0).show_ui(ui, |ui| {
             if ui.selectable_label(value.is_empty(), "(none)").clicked() {
                 value.clear();
             }
@@ -475,25 +473,22 @@ fn role_editor(
     }
     let wants = role.wants();
     let mut add = None;
-    egui::ComboBox::from_id_salt(("add-role", gid, role.label())).selected_text(icon::PLUS).width(36.0).show_ui(
-        ui,
-        |ui| {
-            let mut any = false;
-            for (cid, c) in controls {
-                // Indicators may also use a button's own LED.
-                let fits = c.kind == wants || (wants == ControlKind::Output && c.kind == ControlKind::Button);
-                if fits && !g.role(role).contains(cid) {
-                    any = true;
-                    if ui.selectable_label(false, &c.name).clicked() {
-                        add = Some(cid.clone());
-                    }
+    widgets::combo(("add-role", gid, role.label())).selected_text(icon::PLUS).width(36.0).show_ui(ui, |ui| {
+        let mut any = false;
+        for (cid, c) in controls {
+            // Indicators may also use a button's own LED.
+            let fits = c.kind == wants || (wants == ControlKind::Output && c.kind == ControlKind::Button);
+            if fits && !g.role(role).contains(cid) {
+                any = true;
+                if ui.selectable_label(false, &c.name).clicked() {
+                    add = Some(cid.clone());
                 }
             }
-            if !any {
-                ui.label("No matching controls");
-            }
-        },
-    );
+        }
+        if !any {
+            ui.label("No matching controls");
+        }
+    });
     if let Some(cid) = add {
         g.role_mut(role).push(cid);
     }

@@ -49,8 +49,9 @@ pub fn strip_color(index: Option<u8>) -> Color32 {
     index.and_then(|i| STRIP_COLORS.get(i as usize)).map_or_else(|| pal().accent, |c| c.0)
 }
 
-/// Base spacing unit.
+/// Spacing: the base unit, and the gap under page headers.
 pub const SP_S: f32 = 8.0;
+pub const SP_M: f32 = 14.0;
 
 /// Colours for things drawn as hardware on any theme (the controller diagram).
 pub mod hw {
@@ -169,6 +170,8 @@ impl Palette {
 
     /// `c` laid over the panel at `alpha`, for dimming overlays.
     pub fn veil(&self, alpha: u8) -> Color32 {
+        // Light: much thinner, or the dark hardware (displays, buttons) turns grey.
+        let alpha = if self.dark { alpha } else { (alpha as f32 * 0.4) as u8 };
         Color32::from_rgba_unmultiplied(self.panel.r(), self.panel.g(), self.panel.b(), alpha)
     }
 }
@@ -310,11 +313,14 @@ fn apply_visuals(ctx: &egui::Context, p: &Palette) {
         s.spacing.interact_size.y = 26.0;
         s.spacing.slider_rail_height = 4.0;
         s.spacing.menu_margin = egui::Margin::same(SP_S as i8);
+        // Scrollbars get their own space instead of covering content.
+        s.spacing.scroll = egui::style::ScrollStyle::solid();
 
         let v = &mut s.visuals;
         v.panel_fill = p.panel;
         v.window_fill = p.card;
         v.extreme_bg_color = p.panel_deep;
+        v.text_edit_bg_color = Some(p.inset);
         v.faint_bg_color = p.faint;
         v.override_text_color = Some(p.text);
         v.hyperlink_color = p.accent;

@@ -25,9 +25,12 @@ impl App {
             return;
         };
         let before = p.buttons.clone();
-        ui.label(RichText::new("Buttons").font(semibold(17.0)));
-        widgets::hint(ui, "Buttons that are not part of a group can trigger these actions.");
-        ui.add_space(8.0);
+        widgets::page_header(
+            ui,
+            "Buttons",
+            Some("Buttons that aren't part of a channel strip can run these actions."),
+            |_| {},
+        );
         let spare = p.spare_buttons();
         let mut press = None;
         let mut learn: Option<String> = None;
@@ -37,53 +40,71 @@ impl App {
                     ui.label("Every button belongs to a group. Add a button control under Controller to use it here.");
                 });
             }
-            // Cards in equal-width columns.
+            // Grouped like the hardware, cards in equal-width columns.
             let avail = ui.available_width() - 14.0;
             let cols = ((avail / 440.0).floor() as usize).clamp(1, 3);
             let width = (avail - 12.0 * (cols as f32 - 1.0)) / cols as f32;
-            egui::Grid::new("button-cards").num_columns(cols).spacing([12.0, 12.0]).show(ui, |ui| {
-                for (i, cid) in spare.iter().enumerate() {
-                    let name = p.control_name(cid);
-                    let lit = activity.get(cid).is_some_and(|(t, v)| *v > 0 && t.elapsed().as_millis() < 250);
-                    if lit {
-                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
-                    }
-                    ui.vertical(|ui| {
-                        ui.set_width(width);
-                        ui.set_max_width(width);
-                        let glyph = if lit { icon::RECORD } else { icon::CURSOR_CLICK };
-                        widgets::card(ui, glyph, &name, |ui| {
-                            if lit {
-                                let r = ui.min_rect();
-                                ui.painter().rect_stroke(
-                                    r.expand(14.0),
-                                    10.0,
-                                    Stroke::new(1.5, ASSIGN),
-                                    egui::StrokeKind::Inside,
-                                );
-                            }
-                            let scenes: Vec<String> = p.scenes.keys().cloned().collect();
-                            let action = p.buttons.entry(cid.clone()).or_default();
-                            action_editor(ui, cid, action, &audio, &profiles, &scenes);
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                if widgets::icon_button(ui, icon::PLAY, "Try it").clicked() {
-                                    press = Some(cid.clone());
-                                }
-                                if widgets::icon_button(ui, icon::CROSSHAIR, "Learn")
-                                    .on_hover_text("Press the button on your controller to set which one this is")
-                                    .clicked()
+            let scenes: Vec<String> = p.scenes.keys().cloned().collect();
+            let mut sections: Vec<(&str, Vec<String>)> = Vec::new();
+            for cid in &spare {
+                let section = button_section(&p.control_name(cid));
+                match sections.iter_mut().find(|(s, _)| *s == section) {
+                    Some((_, ids)) => ids.push(cid.clone()),
+                    None => sections.push((section, vec![cid.clone()])),
+                }
+            }
+            sections.sort_by_key(|(s, _)| ["Transport", "Track", "Marker", "Other"].iter().position(|x| x == s));
+            for (section, ids) in sections {
+                if section != "Other" || spare.len() > ids.len() {
+                    ui.label(RichText::new(section.to_uppercase()).size(11.5).color(pal().text_dim).strong());
+                    ui.add_space(2.0);
+                }
+                egui::Grid::new(("button-cards", section)).num_columns(cols).spacing([12.0, 12.0]).show(ui, |ui| {
+                    for (i, cid) in ids.iter().enumerate() {
+                        let name = p.control_name(cid);
+                        let lit = activity.get(cid).is_some_and(|(t, v)| *v > 0 && t.elapsed().as_millis() < 250);
+                        if lit {
+                            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+                        }
+                        ui.vertical(|ui| {
+                            ui.set_width(width);
+                            ui.set_max_width(width);
+                            let glyph = if lit { icon::RECORD } else { button_glyph(&name) };
+                            let corner = |ui: &mut egui::Ui| {
+                                if widgets::icon_only(
+                                    ui,
+                                    icon::CROSSHAIR,
+                                    "Learn: press the button on your controller to set which one this is",
+                                )
+                                .clicked()
                                 {
                                     learn = Some(cid.clone());
                                 }
+                                if widgets::icon_only(ui, icon::PLAY, "Try it").clicked() {
+                                    press = Some(cid.clone());
+                                }
+                            };
+                            widgets::card_with(ui, glyph, &name, corner, |ui| {
+                                if lit {
+                                    let r = ui.min_rect();
+                                    ui.painter().rect_stroke(
+                                        r.expand(14.0),
+                                        10.0,
+                                        Stroke::new(1.5, ASSIGN),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                }
+                                let action = p.buttons.entry(cid.clone()).or_default();
+                                action_editor(ui, cid, action, &audio, &profiles, &scenes);
                             });
                         });
-                    });
-                    if (i + 1) % cols == 0 {
-                        ui.end_row();
+                        if (i + 1) % cols == 0 {
+                            ui.end_row();
+                        }
                     }
-                }
-            });
+                });
+                ui.add_space(14.0);
+            }
         });
         p.buttons.retain(|_, a| *a != ButtonAction::None);
         if p.buttons != before {
@@ -169,7 +190,7 @@ impl App {
                         AutoAction::Bank { bank } => format!("Bank {}", bank + 1),
                         AutoAction::Scene { name } => format!("Scene \"{name}\""),
                     };
-                    egui::ComboBox::from_id_salt(("auto", i)).selected_text(text).width(170.0).show_ui(ui, |ui| {
+                    widgets::combo(("auto", i)).selected_text(text).width(170.0).show_ui(ui, |ui| {
                         for b in 0..banks {
                             let a = AutoAction::Bank { bank: b };
                             if ui.selectable_label(r.action == a, format!("Bank {}", b + 1)).clicked() {
@@ -239,12 +260,12 @@ impl App {
             )
         };
         let mut action: Option<(&str, String)> = None;
-        ui.label(RichText::new("Profiles").font(semibold(17.0)));
-        widgets::hint(
+        widgets::page_header(
             ui,
-            "One profile per controller. The matching profile is picked automatically when a device is plugged in.",
+            "Profiles",
+            Some("One profile per controller. The matching one is picked when a device is plugged in."),
+            |_| {},
         );
-        ui.add_space(8.0);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for (id, p) in &list {
                 let is_active = active.as_deref() == Some(id.as_str());
@@ -427,8 +448,7 @@ impl App {
             (sh.store.settings.clone(), sh.ports_out.clone())
         };
         let before = s.clone();
-        ui.label(RichText::new("Settings").font(semibold(17.0)));
-        ui.add_space(8.0);
+        widgets::page_header(ui, "Settings", None, |_| {});
         let wide = ui.available_width() > 1000.0;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             if wide {
@@ -593,27 +613,22 @@ impl App {
 
     pub(super) fn log(&mut self, ui: &mut egui::Ui) {
         let lines: Vec<crate::engine::LogEntry> = self.shared.lock().unwrap().log.iter().cloned().collect();
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Log").font(semibold(17.0)));
-            ui.add_space(SP_S);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.log_filter)
-                    .hint_text(format!("{}  Filter", icon::MAGNIFYING_GLASS))
-                    .desired_width(220.0),
-            );
+        let mut copied = false;
+        widgets::page_header(ui, "Log", Some("What happened, newest at the bottom."), |ui| {
+            if widgets::icon_button(ui, icon::TRASH, "Clear").clicked() {
+                self.shared.lock().unwrap().log.clear();
+            }
+            if widgets::icon_button(ui, icon::COPY, "Copy").clicked() {
+                let text: String = lines.iter().map(|l| format!("{}  {}\n", l.time, l.text)).collect();
+                ui.ctx().copy_text(text);
+                copied = true;
+            }
             ui.checkbox(&mut self.log_warnings_only, "Problems only");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::icon_button(ui, icon::TRASH, "Clear").clicked() {
-                    self.shared.lock().unwrap().log.clear();
-                }
-                if widgets::icon_button(ui, icon::COPY, "Copy").clicked() {
-                    let text: String = lines.iter().map(|l| format!("{}  {}\n", l.time, l.text)).collect();
-                    ui.ctx().copy_text(text);
-                    self.flash("Log copied");
-                }
-            });
+            widgets::text_field(ui, &mut self.log_filter, "Filter", Some(icon::MAGNIFYING_GLASS), 220.0);
         });
-        ui.add_space(8.0);
+        if copied {
+            self.flash("Log copied");
+        }
         let filter = self.log_filter.to_lowercase();
         let shown: Vec<&crate::engine::LogEntry> = lines
             .iter()
@@ -621,29 +636,93 @@ impl App {
                 (!self.log_warnings_only || l.warn) && (filter.is_empty() || l.text.to_lowercase().contains(&filter))
             })
             .collect();
+        // Dark: a terminal-like display. Light: a plain card, easier to read.
+        let dark = pal().dark;
+        let (bg, text, time, warn) = if dark {
+            (LCD_BG, LCD_TEXT, theme::mix(LCD_TEXT, LCD_BG, 0.45), ASSIGN)
+        } else {
+            (pal().card, pal().text, pal().text_dim, pal().warn_text)
+        };
         egui::Frame::new()
-            .fill(LCD_BG)
+            .fill(bg)
             .corner_radius(8)
-            .stroke(Stroke::new(1.0, egui::Color32::from_black_alpha(200)))
-            .inner_margin(egui::Margin::same(12))
+            .stroke(Stroke::new(1.0, if dark { egui::Color32::from_black_alpha(200) } else { pal().border }))
+            .inner_margin(egui::Margin::same(8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.set_min_height(ui.available_height());
                 egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 3.0;
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     if shown.is_empty() {
-                        let text = if lines.is_empty() { "Nothing logged yet." } else { "Nothing matches." };
-                        ui.label(RichText::new(text).font(mono(12.5)).color(LCD_DIM));
+                        let msg = if lines.is_empty() { "Nothing logged yet." } else { "Nothing matches." };
+                        ui.label(RichText::new(msg).font(mono(12.5)).color(time));
                     }
-                    for l in shown {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(&l.time).font(mono(12.0)).color(LCD_DIM));
-                            let color = if l.warn { ASSIGN } else { LCD_TEXT };
-                            ui.label(RichText::new(&l.text).font(mono(12.5)).color(color));
-                        });
+                    for (i, l) in shown.iter().enumerate() {
+                        // Every other row slightly shaded, so long lines stay easy to follow.
+                        let stripe =
+                            if i % 2 == 1 { pal().sheen(if dark { 5 } else { 0 }) } else { egui::Color32::TRANSPARENT };
+                        let stripe = if !dark && i % 2 == 1 { pal().inset } else { stripe };
+                        egui::Frame::new()
+                            .fill(stripe)
+                            .corner_radius(4)
+                            .inner_margin(egui::Margin::symmetric(6, 3))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new(&l.time).font(mono(12.0)).color(time));
+                                    if l.warn {
+                                        widgets::chip(ui, "WARN", warn);
+                                    }
+                                    ui.label(RichText::new(&l.text).font(mono(12.5)).color(if l.warn {
+                                        warn
+                                    } else {
+                                        text
+                                    }));
+                                });
+                            });
                     }
                 });
             });
+    }
+}
+
+/// Where a spare button goes on the Buttons page, by its name.
+fn button_section(name: &str) -> &'static str {
+    let n = name.to_lowercase();
+    if ["play", "stop", "rec", "rewind", "forward", "ffwd", "rew"].iter().any(|k| n.contains(k)) {
+        "Transport"
+    } else if n.contains("track") || n.contains("cycle") {
+        "Track"
+    } else if n.contains("marker") {
+        "Marker"
+    } else {
+        "Other"
+    }
+}
+
+/// An icon that looks like the button on the device.
+fn button_glyph(name: &str) -> &'static str {
+    let n = name.to_lowercase();
+    if n.contains("rewind") || n.contains("rew") {
+        icon::REWIND
+    } else if n.contains("forward") || n.contains("ffwd") {
+        icon::FAST_FORWARD
+    } else if n.contains("stop") {
+        icon::STOP
+    } else if n.contains("play") {
+        icon::PLAY
+    } else if n.contains("rec") {
+        icon::RECORD
+    } else if n.contains("cycle") {
+        icon::REPEAT
+    } else if n.contains("set") {
+        icon::MAP_PIN
+    } else if n.contains('<') || n.contains("prev") || n.contains("left") {
+        icon::CARET_LEFT
+    } else if n.contains('>') || n.contains("next") || n.contains("right") {
+        icon::CARET_RIGHT
+    } else {
+        icon::CURSOR_CLICK
     }
 }
 
@@ -659,7 +738,7 @@ fn device_combo(
     ui.horizontal(|ui| {
         ui.label(label);
         let text = options.iter().find(|(n, _)| n == value).map_or(default, |(_, l)| l.as_str());
-        egui::ComboBox::from_id_salt(id).selected_text(text).width(220.0).show_ui(ui, |ui| {
+        widgets::combo(id).selected_text(text).width(220.0).show_ui(ui, |ui| {
             ui.selectable_value(value, String::new(), default);
             for (name, l) in options {
                 ui.selectable_value(value, name.clone(), l);
@@ -694,7 +773,7 @@ fn action_editor(
         ButtonAction::Monitor { source: String::new(), sink: String::new() },
         ButtonAction::EasyEffects { preset: String::new() },
     ];
-    egui::ComboBox::from_id_salt(("action", cid)).selected_text(action.label()).width(240.0).show_ui(ui, |ui| {
+    widgets::combo(("action", cid)).selected_text(action.label()).width(240.0).show_ui(ui, |ui| {
         for k in kinds {
             let same = std::mem::discriminant(&k) == std::mem::discriminant(action);
             if ui.selectable_label(same, k.label()).clicked() && !same {
@@ -804,7 +883,7 @@ fn action_editor(
                 widgets::hint(ui, "No scenes yet. Save one with the Scenes menu on the Mixer page.");
             } else {
                 let text = if name.is_empty() { "Pick…".to_string() } else { name.clone() };
-                egui::ComboBox::from_id_salt(("scene-action", cid)).selected_text(text).show_ui(ui, |ui| {
+                widgets::combo(("scene-action", cid)).selected_text(text).show_ui(ui, |ui| {
                     for s in scenes {
                         ui.selectable_value(name, s.clone(), s);
                     }
@@ -850,7 +929,7 @@ fn action_editor(
                 ui.add(egui::TextEdit::singleline(preset).hint_text("Preset name").desired_width(220.0));
             } else {
                 let text = if preset.is_empty() { "Pick…".to_string() } else { preset.clone() };
-                egui::ComboBox::from_id_salt(("ee-preset", cid)).selected_text(text).width(220.0).show_ui(ui, |ui| {
+                widgets::combo(("ee-preset", cid)).selected_text(text).width(220.0).show_ui(ui, |ui| {
                     for (name, input) in presets {
                         let label = format!("{}  {name}", if input { icon::MICROPHONE } else { icon::SPEAKER_HIGH });
                         ui.selectable_value(preset, name.clone(), label);
@@ -921,7 +1000,7 @@ fn action_editor(
         ButtonAction::Profile { id } => {
             let current =
                 profiles.iter().find(|(pid, _)| pid == id).map(|(_, n)| n.clone()).unwrap_or_else(|| "Pick…".into());
-            egui::ComboBox::from_id_salt(("profile-action", cid)).selected_text(current).show_ui(ui, |ui| {
+            widgets::combo(("profile-action", cid)).selected_text(current).show_ui(ui, |ui| {
                 for (pid, name) in profiles {
                     ui.selectable_value(id, pid.clone(), name);
                 }

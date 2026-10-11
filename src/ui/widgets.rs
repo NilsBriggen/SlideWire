@@ -428,6 +428,17 @@ pub fn lcd(
 
 /// Rounded panel with a header line.
 pub fn card<R>(ui: &mut Ui, icon: &str, title: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    card_with(ui, icon, title, |_| {}, add_contents)
+}
+
+/// A [`card`] with controls at the right end of its header.
+pub fn card_with<R>(
+    ui: &mut Ui,
+    icon: &str,
+    title: &str,
+    header_right: impl FnOnce(&mut Ui),
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
     egui::Frame::new()
         .fill(pal().card)
         .stroke(Stroke::new(1.0, pal().border))
@@ -440,6 +451,7 @@ pub fn card<R>(ui: &mut Ui, icon: &str, title: &str, add_contents: impl FnOnce(&
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(icon).size(17.0).color(pal().accent));
                     ui.label(egui::RichText::new(title).font(semibold(15.0)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), header_right);
                 });
                 ui.add_space(4.0);
             }
@@ -540,6 +552,67 @@ pub fn icon_framed(ui: &mut Ui, icon: &str, label: &str) -> Response {
     let name = label.to_string();
     r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
     r.on_hover_text(label)
+}
+
+/// The title line every page starts with: title, an optional one-line
+/// explanation, and controls on the right.
+pub fn page_header(ui: &mut Ui, title: &str, subtitle: Option<&str>, right: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(egui::RichText::new(title).font(semibold(18.0)).color(pal().text_strong));
+            if let Some(sub) = subtitle {
+                hint(ui, sub);
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
+    });
+    ui.add_space(SP_M);
+}
+
+/// A single-line text field in the app's style: inset, with an accent ring
+/// while focused and an optional icon before the text.
+pub fn text_field(ui: &mut Ui, text: &mut String, hint_text: &str, icon: Option<&str>, width: f32) -> Response {
+    let p = pal();
+    let id = ui.next_auto_id();
+    let focused = ui.memory(|m| m.has_focus(id));
+    egui::Frame::new()
+        .fill(p.inset)
+        .stroke(Stroke::new(if focused { 1.5 } else { 1.0 }, if focused { p.accent } else { p.border_strong }))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            // Icon first even inside right-to-left rows.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                if let Some(ic) = icon {
+                    ui.label(egui::RichText::new(ic).color(p.text_dim));
+                }
+                let w = (width - if icon.is_some() { 38.0 } else { 16.0 }).max(40.0);
+                ui.add(
+                    egui::TextEdit::singleline(text)
+                        .id(id)
+                        .frame(egui::Frame::NONE)
+                        .hint_text(hint_text)
+                        .desired_width(w),
+                )
+            })
+            .inner
+        })
+        .inner
+}
+
+/// A combo box whose arrow is the app's caret icon instead of egui's triangle.
+pub fn combo(id_salt: impl std::hash::Hash + std::fmt::Debug) -> egui::ComboBox {
+    egui::ComboBox::from_id_salt(id_salt).icon(|ui, rect, visuals, _open| {
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            theme::icon::CARET_DOWN,
+            egui::FontId::proportional(rect.height().max(12.0)),
+            visuals.fg_stroke.color,
+        );
+    })
 }
 
 /// Hint text in a faint colour.

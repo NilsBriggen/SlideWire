@@ -953,11 +953,8 @@ impl App {
         let inputs = group_streams(&audio.app_inputs);
         let total = apps.len() + inputs.len() + audio.sinks.len() + audio.sources.len();
         if total > 8 || !self.source_filter.is_empty() || self.want_filter {
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut self.source_filter)
-                    .hint_text(format!("{}  Filter", icon::MAGNIFYING_GLASS))
-                    .desired_width(f32::INFINITY),
-            );
+            let w = ui.available_width();
+            let r = widgets::text_field(ui, &mut self.source_filter, "Filter", Some(icon::MAGNIFYING_GLASS), w);
             if std::mem::take(&mut self.want_filter) {
                 r.request_focus();
             }
@@ -1154,7 +1151,7 @@ impl App {
                         .iter()
                         .find(|d| d.name == current)
                         .map_or("Default output".to_string(), |d| d.label.clone());
-                    egui::ComboBox::from_id_salt(("bus-out", i))
+                    widgets::combo(("bus-out", i))
                         .selected_text(format!("{}  {text}", icon::SPEAKER_HIGH))
                         .width(170.0)
                         .show_ui(ui, |ui| {
