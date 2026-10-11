@@ -293,6 +293,35 @@ impl StreamParser {
     }
 }
 
+/// Calls `on_change` whenever a sound device node appears or disappears in
+/// `/dev/snd` (a controller plugged in or out), so ports can be rescanned
+/// right away instead of on the next periodic scan.
+pub fn watch_devices(on_change: impl Fn() + Send + 'static) {
+    let spawned = std::thread::Builder::new().name("hotplug".into()).spawn(move || unsafe {
+        let fd = libc::inotify_init1(libc::IN_CLOEXEC);
+        if fd < 0 {
+            return;
+        }
+        let path = c"/dev/snd";
+        if libc::inotify_add_watch(fd, path.as_ptr(), libc::IN_CREATE | libc::IN_DELETE) < 0 {
+            libc::close(fd);
+            return;
+        }
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = libc::read(fd, buf.as_mut_ptr().cast(), buf.len());
+            if n <= 0 {
+                break;
+            }
+            on_change();
+        }
+        libc::close(fd);
+    });
+    if let Err(e) = spawned {
+        eprintln!("hotplug watcher: {e}");
+    }
+}
+
 /// `--list-ports`
 pub fn print_ports() {
     let l = PortLister::new();

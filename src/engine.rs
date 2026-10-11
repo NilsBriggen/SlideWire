@@ -50,6 +50,8 @@ pub enum Event {
     Focus(FocusInfo),
     Ui(UiCmd),
     ShowWindow,
+    /// A sound device was plugged in or out.
+    DevicesChanged,
 }
 
 /// What the GUI draws for each group.
@@ -168,6 +170,9 @@ pub struct Engine {
     hw_pos: HashMap<String, f32>,
     /// Groups whose fader hasn't picked up the volume yet -> fader position.
     waiting: HashMap<String, f32>,
+    /// Port scans scheduled after a hotplug event.
+    rescan_at: Option<Instant>,
+    rescan_follow_up: Option<Instant>,
     show_window: Sender<()>,
 }
 
@@ -198,12 +203,18 @@ impl Engine {
             peaks: HashMap::new(),
             hw_pos: HashMap::new(),
             waiting: HashMap::new(),
+            rescan_at: None,
+            rescan_follow_up: None,
             show_window,
         }
     }
 
     pub fn run(mut self) {
         let mut last_scan = Instant::now() - Duration::from_secs(10);
+        let tx = self.tx.clone();
+        midi::watch_devices(move || {
+            let _ = tx.send(Event::DevicesChanged);
+        });
         let mut last_heartbeat = Instant::now();
         let mut last_meter = Instant::now();
         loop {
@@ -220,9 +231,15 @@ impl Engine {
                 Err(_) => return,
             }
             let now = Instant::now();
-            if now - last_scan > Duration::from_secs(2) {
+            // The sequencer port shows up a moment after the device node, so
+            // scan again shortly after a hotplug event.
+            let hotplug_due = self.rescan_at.as_ref().is_some_and(|at| now >= *at);
+            if hotplug_due || now - last_scan > Duration::from_secs(2) {
                 last_scan = now;
                 self.scan_ports();
+                if hotplug_due {
+                    self.rescan_at = self.rescan_follow_up.take();
+                }
             }
             let heartbeat = self.shared.lock().unwrap().store.settings.led_heartbeat;
             if heartbeat && now - last_heartbeat > Duration::from_secs(5) {
@@ -253,6 +270,11 @@ impl Engine {
                 let _ = self.show_window.send(());
             }
             Event::Ui(cmd) => self.on_ui(cmd),
+            Event::DevicesChanged => {
+                let now = Instant::now();
+                self.rescan_at = Some(now + Duration::from_millis(250));
+                self.rescan_follow_up = Some(now + Duration::from_millis(1000));
+            }
         }
     }
 
