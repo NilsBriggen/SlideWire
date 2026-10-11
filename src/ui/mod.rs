@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
-use eframe::egui::{self, RichText, Sense, Stroke, Vec2, pos2, vec2};
+use eframe::egui::{self, Color32, RichText, Sense, Stroke, Vec2, pos2, vec2};
 
 use crate::WindowCmd;
 use crate::engine::{Event, SharedRef, UiCmd};
@@ -38,6 +38,19 @@ enum PickPurpose {
     Export(String),
 }
 
+/// Something destructive waiting for a yes.
+pub(super) struct Confirm {
+    pub title: String,
+    pub body: String,
+    pub button: String,
+    pub action: ConfirmAction,
+}
+
+pub(super) enum ConfirmAction {
+    DeleteProfile(String),
+    RemoveBank(usize),
+}
+
 pub struct App {
     shared: SharedRef,
     events: Sender<Event>,
@@ -54,6 +67,9 @@ pub struct App {
     control_search: String,
     scene_name: String,
     source_filter: String,
+    confirm: Option<Confirm>,
+    /// Profile being renamed: (id, text).
+    profile_rename: Option<(String, String)>,
     /// LED test in progress: started, control ids, next index.
     led_test: Option<(Instant, Vec<String>, usize)>,
     /// Strip being renamed in its menu: (group id, text).
@@ -109,6 +125,8 @@ impl App {
             rename: None,
             source_filter: String::new(),
             led_test: None,
+            confirm: None,
+            profile_rename: None,
             meter_hold: HashMap::new(),
             show_sources: true,
             show_doctor: crate::config::env("TAB").as_deref() == Some("doctor"),
@@ -140,18 +158,14 @@ impl App {
         let slot = self.picked.clone();
         let ctx = self.shared.lock().unwrap().egui.clone();
         std::thread::spawn(move || {
-            let mut cmd = std::process::Command::new("kdialog");
-            match purpose {
-                PickPurpose::Import => cmd.args(["--getopenfilename", ".", "*.json|Profiles (*.json)"]),
-                PickPurpose::Export(_) => cmd.args(["--getsavefilename", "profile.json", "*.json|Profiles (*.json)"]),
+            let path = match &purpose {
+                PickPurpose::Import => crate::portal::pick_json("Import a profile", None),
+                PickPurpose::Export(_) => crate::portal::pick_json("Export the profile", Some("profile.json")),
             };
-            if let Ok(out) = cmd.output() {
-                let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if out.status.success() && !path.is_empty() {
-                    *slot.lock().unwrap() = Some((purpose, PathBuf::from(path)));
-                    if let Some(c) = ctx {
-                        c.request_repaint();
-                    }
+            if let Some(path) = path {
+                *slot.lock().unwrap() = Some((purpose, path));
+                if let Some(c) = ctx {
+                    c.request_repaint();
                 }
             }
         });
@@ -339,6 +353,51 @@ fn tab_button(ui: &mut egui::Ui, ic: &str, label: &str, selected: bool) -> egui:
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+impl App {
+    fn confirm_dialog(&mut self, ctx: &egui::Context) {
+        let Some(c) = &self.confirm else { return };
+        let mut answer = None;
+        let frame = egui::Frame::popup(&ctx.global_style()).inner_margin(20).corner_radius(12);
+        let modal = egui::Modal::new(egui::Id::new("confirm")).frame(frame).show(ctx, |ui| {
+            ui.set_width(340.0);
+            ui.label(RichText::new(&c.title).font(semibold(16.0)));
+            ui.add_space(4.0);
+            ui.label(&c.body);
+            ui.add_space(12.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let danger =
+                    egui::Button::new(RichText::new(&c.button).color(Color32::WHITE)).fill(MUTE.gamma_multiply(0.85));
+                if ui.add(danger).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        match answer {
+            Some(true) => {
+                let action = self.confirm.take().unwrap().action;
+                match action {
+                    ConfirmAction::DeleteProfile(id) => {
+                        let mut sh = self.shared.lock().unwrap();
+                        sh.store.delete_profile(&id);
+                        let _ = sh.store.save_settings();
+                        drop(sh);
+                        self.send(UiCmd::ProfileEdited);
+                    }
+                    ConfirmAction::RemoveBank(i) => self.edit_profile(|p| p.remove_bank(i)),
+                }
+            }
+            Some(false) => self.confirm = None,
+            None => {}
+        }
+    }
+}
+
 impl Drop for App {
     fn drop(&mut self) {
         if let Ok(mut sh) = self.shared.lock() {
@@ -384,6 +443,7 @@ impl eframe::App for App {
                 Tab::Log => self.log(ui),
             });
         self.doctor_window(&ctx);
+        self.confirm_dialog(&ctx);
 
         // Everything that moves asks for its own frames (engine events, meter
         // peaks, blinks); this slow floor only catches anything that didn't.

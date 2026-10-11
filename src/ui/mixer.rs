@@ -161,7 +161,12 @@ impl App {
             r.context_menu(|ui| {
                 let label = if i == 0 { "Clear bank 1" } else { "Remove this bank" };
                 if ui.button(format!("{}  {label}", icon::TRASH)).clicked() {
-                    self.edit_profile(|p| p.remove_bank(i));
+                    self.confirm = Some(super::Confirm {
+                        title: format!("{label}?"),
+                        body: format!("Everything assigned in bank {} is removed.", i + 1),
+                        button: label.into(),
+                        action: super::ConfirmAction::RemoveBank(i),
+                    });
                     ui.close();
                 }
             });

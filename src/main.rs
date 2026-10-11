@@ -11,6 +11,7 @@ mod engine;
 mod icon;
 mod mapping;
 mod midi;
+mod portal;
 mod profile;
 mod tray;
 mod ui;

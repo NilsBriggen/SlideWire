@@ -88,6 +88,45 @@ impl App {
         }
     }
 
+    /// The profile's name; double-click to rename it in place.
+    fn profile_name(&mut self, ui: &mut egui::Ui, id: &str, name: &str) {
+        if let Some((rid, text)) = &mut self.profile_rename
+            && rid == id
+        {
+            let edit_id = ui.id().with(("rename-profile", id));
+            let r = ui.add(egui::TextEdit::singleline(text).id(edit_id).font(semibold(15.0)).desired_width(260.0));
+            // Focus once when editing starts; after that, leaving the field ends it.
+            let started = ui.data_mut(|d| std::mem::replace(d.get_temp_mut_or(edit_id, true), false));
+            if started {
+                r.request_focus();
+            }
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let done = r.lost_focus() || (r.has_focus() && enter);
+            let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if done || cancel {
+                let new = text.trim().to_string();
+                if !cancel && !new.is_empty() && new != name {
+                    let mut sh = self.shared.lock().unwrap();
+                    if let Some(p) = sh.store.profiles.get_mut(id) {
+                        p.name = new;
+                        let _ = sh.store.save_profile(id);
+                    }
+                    drop(sh);
+                    self.send(UiCmd::ProfileEdited);
+                }
+                self.profile_rename = None;
+                ui.data_mut(|d| d.remove::<bool>(edit_id));
+            }
+            return;
+        }
+        let r = ui
+            .add(egui::Label::new(RichText::new(name).font(semibold(15.0))).sense(egui::Sense::click()))
+            .on_hover_text("Double-click to rename");
+        if r.double_clicked() {
+            self.profile_rename = Some((id.to_string(), name.to_string()));
+        }
+    }
+
     pub(super) fn profiles(&mut self, ui: &mut egui::Ui) {
         let (list, active, ports_in): (Vec<(String, Profile)>, Option<String>, Vec<String>) = {
             let sh = self.shared.lock().unwrap();
@@ -134,7 +173,7 @@ impl App {
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 1.0;
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(&p.name).font(semibold(15.0)));
+                                    self.profile_name(ui, id, &p.name);
                                     if is_active {
                                         widgets::chip(ui, "ACTIVE", pal().accent);
                                     }
@@ -220,10 +259,16 @@ impl App {
                 self.pick_file(PickPurpose::Export(arg));
             }
             "delete" => {
-                sh.store.delete_profile(&arg);
-                let _ = sh.store.save_settings();
+                let name = sh.store.profiles.get(&arg).map(|p| p.name.clone()).unwrap_or_default();
                 drop(sh);
-                self.send(UiCmd::ProfileEdited);
+                self.confirm = Some(super::Confirm {
+                    title: format!("Delete \"{name}\"?"),
+                    body:
+                        "Its controls, assignments, banks and scenes are deleted too. Export it first to keep a copy."
+                            .into(),
+                    button: "Delete profile".into(),
+                    action: super::ConfirmAction::DeleteProfile(arg),
+                });
             }
             "new" | "nano" => {
                 let p = if what == "nano" {
