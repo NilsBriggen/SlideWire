@@ -287,8 +287,7 @@ pub fn uninstall_focus_script(conn: &Connection) {
 
 /// Send a media command to the most relevant MPRIS player: one that is
 /// playing, else one that is paused, else any.
-pub fn media(key: MediaKey) -> Result<()> {
-    let conn = Connection::session()?;
+fn mpris_names(conn: &Connection) -> Result<Vec<String>> {
     let names: Vec<String> = conn
         .call_method(
             Some("org.freedesktop.DBus"),
@@ -299,7 +298,33 @@ pub fn media(key: MediaKey) -> Result<()> {
         )?
         .body()
         .deserialize()?;
-    let players: Vec<String> = names.into_iter().filter(|n| n.starts_with("org.mpris.MediaPlayer2.")).collect();
+    Ok(names.into_iter().filter(|n| n.starts_with("org.mpris.MediaPlayer2.")).collect())
+}
+
+/// Short names of the running media players ("spotify", "firefox", ...).
+pub fn mpris_players() -> Vec<String> {
+    let Ok(conn) = Connection::session() else { return Vec::new() };
+    let mut names: Vec<String> = mpris_names(&conn)
+        .unwrap_or_default()
+        .iter()
+        .map(|n| {
+            // Drop the prefix and any instance suffix ("firefox.instance_1_23").
+            let short = n.trim_start_matches("org.mpris.MediaPlayer2.");
+            short.split(".instance").next().unwrap_or(short).to_string()
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Send a media key to `player` (part of its name), or to whichever player
+/// is playing when that's empty.
+pub fn media(key: MediaKey, player: &str) -> Result<()> {
+    let conn = Connection::session()?;
+    let want = player.trim().to_lowercase();
+    let players: Vec<String> =
+        mpris_names(&conn)?.into_iter().filter(|n| want.is_empty() || n.to_lowercase().contains(&want)).collect();
     let status = |p: &str| -> String {
         conn.call_method(
             Some(p),
@@ -325,7 +350,10 @@ pub fn media(key: MediaKey) -> Result<()> {
         })
         .collect();
     let Some((_, player)) = ranked.iter().min_by_key(|(r, _)| *r) else {
-        anyhow::bail!("no MPRIS media player running");
+        if want.is_empty() {
+            anyhow::bail!("no MPRIS media player running");
+        }
+        anyhow::bail!("no media player named like \"{player}\" is running");
     };
     let method = match key {
         MediaKey::PlayPause => "PlayPause",

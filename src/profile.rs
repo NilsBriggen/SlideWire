@@ -359,6 +359,9 @@ pub enum ButtonAction {
     },
     Media {
         key: MediaKey,
+        /// Part of the player's name (e.g. "spotify"); empty: whichever is playing.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        player: String,
     },
     /// Run a shell command.
     Command {
@@ -655,10 +658,10 @@ impl Profile {
             ("Marker set", 60, None),
             ("Marker <", 61, None),
             ("Marker >", 62, None),
-            ("Rewind", 43, Some(ButtonAction::Media { key: MediaKey::Previous })),
-            ("Fast forward", 44, Some(ButtonAction::Media { key: MediaKey::Next })),
-            ("Stop", 42, Some(ButtonAction::Media { key: MediaKey::Stop })),
-            ("Play", 41, Some(ButtonAction::Media { key: MediaKey::PlayPause })),
+            ("Rewind", 43, Some(ButtonAction::Media { key: MediaKey::Previous, player: String::new() })),
+            ("Fast forward", 44, Some(ButtonAction::Media { key: MediaKey::Next, player: String::new() })),
+            ("Stop", 42, Some(ButtonAction::Media { key: MediaKey::Stop, player: String::new() })),
+            ("Play", 41, Some(ButtonAction::Media { key: MediaKey::PlayPause, player: String::new() })),
             ("Record", 45, Some(ButtonAction::MuteInputs)),
         ];
         for (name, cc, action) in transport {

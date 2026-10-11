@@ -600,11 +600,11 @@ impl Engine {
                     self.audio.send(AudioCmd::SetMute(r.kind, r.index, mute));
                 }
             }
-            ButtonAction::Media { key } => {
-                let key = *key;
+            ButtonAction::Media { key, player } => {
+                let (key, player) = (*key, player.clone());
                 let shared = self.shared.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = crate::dbus::media(key) {
+                    if let Err(e) = crate::dbus::media(key, &player) {
                         shared.lock().unwrap().warn(format!("Media key: {e:#}"));
                     }
                 });

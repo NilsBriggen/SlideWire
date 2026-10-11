@@ -503,7 +503,7 @@ fn action_editor(
 ) {
     let kinds = [
         ButtonAction::None,
-        ButtonAction::Media { key: MediaKey::PlayPause },
+        ButtonAction::Media { key: MediaKey::PlayPause, player: String::new() },
         ButtonAction::Mute { targets: vec![Target::DefaultOutput] },
         ButtonAction::DefaultOutput { names: vec![] },
         ButtonAction::DefaultInput { names: vec![] },
@@ -526,7 +526,7 @@ fn action_editor(
     });
     match action {
         ButtonAction::None => {}
-        ButtonAction::Media { key } => {
+        ButtonAction::Media { key, player } => {
             ui.horizontal(|ui| {
                 for (k, l) in [
                     (MediaKey::PlayPause, format!("{}  Play/Pause", icon::PLAY_PAUSE)),
@@ -536,6 +536,23 @@ fn action_editor(
                 ] {
                     ui.selectable_value(key, k, l);
                 }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Player");
+                ui.add(egui::TextEdit::singleline(player).hint_text("whichever is playing").desired_width(160.0));
+                let r = ui.small_button(icon::CARET_DOWN).on_hover_text("Running players");
+                egui::Popup::menu(&r).show(|ui| {
+                    let players = crate::dbus::mpris_players();
+                    if players.is_empty() {
+                        widgets::hint(ui, "No media players running.");
+                    }
+                    for p in players {
+                        if ui.button(&p).clicked() {
+                            *player = p;
+                            ui.close();
+                        }
+                    }
+                });
             });
         }
         ButtonAction::Mute { targets } => {
