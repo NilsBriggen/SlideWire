@@ -163,7 +163,7 @@
  "In use": "In use",
  "Input device": "Input device",
  "Inputs": "Inputs",
- "Inter and JetBrains Mono fonts: SIL Open Font License 1.1. Phosphor icons: MIT License. Rust crates: see each crate's licence.": "Inter and JetBrains Mono fonts: SIL Open Font License 1.1. Phosphor icons: MIT License. Rust crates: see each crate's licence.",
+ "Inter and JetBrains Mono fonts: SIL Open Font License 1.1. Phosphor icons: MIT License. egui's built-in fonts: Ubuntu Font Licence 1.0 and SIL Open Font License 1.1. Rust crates: see each crate's licence.": "Inter and JetBrains Mono fonts: SIL Open Font License 1.1. Phosphor icons: MIT License. egui's built-in fonts: Ubuntu Font Licence 1.0 and SIL Open Font License 1.1. Rust crates: see each crate's licence.",
  "It isn't mapped in this profile yet; map it on the Controller page.": "It isn't mapped in this profile yet; map it on the Controller page.",
  "Its controls, assignments, banks and scenes are deleted too. Export it first to keep a copy.": "Its controls, assignments, banks and scenes are deleted too. Export it first to keep a copy.",
  "Keep them": "Keep them",

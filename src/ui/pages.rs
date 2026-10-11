@@ -634,7 +634,7 @@ impl App {
                 widgets::hint(
                     ui,
                     &t!(
-                        "Inter and JetBrains Mono fonts: SIL Open Font License 1.1. Phosphor icons: MIT License. Rust crates: see each crate's licence."
+                        "Inter and JetBrains Mono fonts: SIL Open Font License 1.1. Phosphor icons: MIT License. egui's built-in fonts: Ubuntu Font Licence 1.0 and SIL Open Font License 1.1. Rust crates: see each crate's licence."
                     ),
                 );
             });
