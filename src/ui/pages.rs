@@ -438,9 +438,35 @@ impl App {
     }
 
     pub(super) fn log(&mut self, ui: &mut egui::Ui) {
-        let lines: Vec<String> = self.shared.lock().unwrap().log.iter().cloned().collect();
-        ui.label(RichText::new("Log").font(semibold(17.0)));
+        let lines: Vec<crate::engine::LogEntry> = self.shared.lock().unwrap().log.iter().cloned().collect();
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Log").font(semibold(17.0)));
+            ui.add_space(SP_S);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.log_filter)
+                    .hint_text(format!("{}  Filter", icon::MAGNIFYING_GLASS))
+                    .desired_width(220.0),
+            );
+            ui.checkbox(&mut self.log_warnings_only, "Problems only");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::icon_button(ui, icon::TRASH, "Clear").clicked() {
+                    self.shared.lock().unwrap().log.clear();
+                }
+                if widgets::icon_button(ui, icon::COPY, "Copy").clicked() {
+                    let text: String = lines.iter().map(|l| format!("{}  {}\n", l.time, l.text)).collect();
+                    ui.ctx().copy_text(text);
+                    self.flash("Log copied");
+                }
+            });
+        });
         ui.add_space(8.0);
+        let filter = self.log_filter.to_lowercase();
+        let shown: Vec<&crate::engine::LogEntry> = lines
+            .iter()
+            .filter(|l| {
+                (!self.log_warnings_only || l.warn) && (filter.is_empty() || l.text.to_lowercase().contains(&filter))
+            })
+            .collect();
         egui::Frame::new()
             .fill(LCD_BG)
             .corner_radius(8)
@@ -450,11 +476,17 @@ impl App {
                 ui.set_width(ui.available_width());
                 ui.set_min_height(ui.available_height());
                 egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
-                    if lines.is_empty() {
-                        ui.label(RichText::new("Nothing logged yet.").font(mono(12.5)).color(LCD_DIM));
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    if shown.is_empty() {
+                        let text = if lines.is_empty() { "Nothing logged yet." } else { "Nothing matches." };
+                        ui.label(RichText::new(text).font(mono(12.5)).color(LCD_DIM));
                     }
-                    for l in lines {
-                        ui.label(RichText::new(l).font(mono(12.5)).color(LCD_TEXT));
+                    for l in shown {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(&l.time).font(mono(12.0)).color(LCD_DIM));
+                            let color = if l.warn { ASSIGN } else { LCD_TEXT };
+                            ui.label(RichText::new(&l.text).font(mono(12.5)).color(color));
+                        });
                     }
                 });
             });
@@ -552,7 +584,18 @@ fn action_editor(
         }
         ButtonAction::Keys { keys } => {
             ui.add(egui::TextEdit::singleline(keys).desired_width(220.0).hint_text("ctrl+shift+m"));
-            widgets::hint(ui, "Needs ydotool with ydotoold running.");
+            if keys_ready() {
+                widgets::hint(ui, &format!("{}  ydotool is ready.", icon::CHECK));
+            } else {
+                ui.label(
+                    RichText::new(format!(
+                        "{}  Needs ydotool with ydotoold running (sudo pacman -S ydotool; systemctl --user enable --now ydotool).",
+                        icon::WARNING
+                    ))
+                    .size(12.5)
+                    .color(pal().warn_text),
+                );
+            }
         }
         ButtonAction::Bank { step } => {
             ui.horizontal(|ui| {
@@ -641,6 +684,19 @@ fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
         });
         widgets::toggle(ui, &mut s.reduce_motion, "Reduce motion");
     });
+}
+
+/// Is ydotool installed and its daemon running? Checked once.
+fn keys_ready() -> bool {
+    static READY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *READY.get_or_init(|| {
+        let installed =
+            std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("ydotool").is_file()));
+        let socket = std::env::var_os("YDOTOOL_SOCKET").map(std::path::PathBuf::from).unwrap_or_else(|| {
+            std::path::PathBuf::from(std::env::var("XDG_RUNTIME_DIR").unwrap_or_default()).join(".ydotool_socket")
+        });
+        installed && (socket.exists() || std::path::Path::new("/tmp/.ydotool_socket").exists())
+    })
 }
 
 /// Volume against fader position, with the straight 1.0 curve for reference.

@@ -60,6 +60,24 @@ pub enum Event {
     DevicesChanged,
 }
 
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    /// Local time, "HH:MM:SS".
+    pub time: String,
+    pub warn: bool,
+    pub text: String,
+}
+
+/// Local wall-clock time as "HH:MM:SS".
+fn clock_time() -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+        as libc::time_t;
+    // SAFETY: localtime_r only writes into the struct we pass.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&now, &mut tm) };
+    format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
+}
+
 /// What the GUI draws for each group.
 #[derive(Debug, Clone, Default)]
 pub struct StripView {
@@ -110,7 +128,7 @@ pub struct Shared {
     pub last_msg: Option<(String, Instant)>,
     pub learn: Option<LearnRequest>,
     pub strips: Vec<StripView>,
-    pub log: VecDeque<String>,
+    pub log: VecDeque<LogEntry>,
     pub ui_visible: bool,
     pub egui: Option<eframe::egui::Context>,
     /// Control id -> when it last sent a message and the raw value.
@@ -131,10 +149,18 @@ impl Shared {
         self.active_id().and_then(|id| self.store.profiles.get(&id))
     }
     pub fn log(&mut self, msg: impl Into<String>) {
-        let msg = msg.into();
-        eprintln!("{msg}");
-        self.log.push_back(msg);
-        while self.log.len() > 200 {
+        self.push_log(false, msg.into());
+    }
+
+    /// Log something that went wrong; shown in amber.
+    pub fn warn(&mut self, msg: impl Into<String>) {
+        self.push_log(true, msg.into());
+    }
+
+    fn push_log(&mut self, warn: bool, text: String) {
+        eprintln!("{text}");
+        self.log.push_back(LogEntry { time: clock_time(), warn, text });
+        while self.log.len() > 1000 {
             self.log.pop_front();
         }
     }
@@ -354,7 +380,7 @@ impl Engine {
                     Err(e) => {
                         let msg = format!("{e:#}");
                         if sh.midi_error.as_deref() != Some(msg.as_str()) {
-                            sh.log(msg.clone());
+                            sh.warn(msg.clone());
                         }
                         sh.midi_error = Some(msg);
                     }
@@ -372,7 +398,7 @@ impl Engine {
                         sh.connected_out = Some(port.clone());
                         sh.log(format!("Connected output {port}"));
                     }
-                    Err(e) => sh.log(format!("{e:#}")),
+                    Err(e) => sh.warn(format!("{e:#}")),
                 }
             }
         }
@@ -534,13 +560,13 @@ impl Engine {
                 let shared = self.shared.clone();
                 std::thread::spawn(move || {
                     if let Err(e) = crate::dbus::media(key) {
-                        shared.lock().unwrap().log(format!("Media key: {e:#}"));
+                        shared.lock().unwrap().warn(format!("Media key: {e:#}"));
                     }
                 });
             }
             ButtonAction::Command { command } => {
                 if let Err(e) = crate::actions::run_command(command) {
-                    self.shared.lock().unwrap().log(format!("Command: {e:#}"));
+                    self.shared.lock().unwrap().warn(format!("Command: {e:#}"));
                 }
             }
             ButtonAction::Keys { keys } => {
@@ -548,7 +574,7 @@ impl Engine {
                 let shared = self.shared.clone();
                 std::thread::spawn(move || {
                     if let Err(e) = crate::actions::press_keys(&keys) {
-                        shared.lock().unwrap().log(format!("Keys: {e:#}"));
+                        shared.lock().unwrap().warn(format!("Keys: {e:#}"));
                     }
                 });
             }
@@ -678,7 +704,7 @@ impl Engine {
     fn recall_scene(&mut self, name: &str) {
         let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
         let Some(scene) = profile.scenes.get(name).cloned() else {
-            self.shared.lock().unwrap().log(format!("No scene called \"{name}\""));
+            self.shared.lock().unwrap().warn(format!("No scene called \"{name}\""));
             return;
         };
         if scene.bank != profile.bank && scene.bank < profile.bank_count() {
@@ -903,7 +929,7 @@ impl Engine {
         } else {
             let focus = sh.focus.clone();
             let Some(pid) = focus.pid else {
-                sh.log("Assign: no focused window known");
+                sh.warn("Assign: no focused window known");
                 return;
             };
             let stream = sh.audio.apps.iter().find(|a| self.related_to_focus_uncached(pid, a)).cloned();

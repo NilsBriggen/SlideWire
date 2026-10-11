@@ -153,7 +153,7 @@ fn main() {
         source_peaks: Default::default(),
     }));
     for w in warnings {
-        shared.lock().unwrap().log(w);
+        shared.lock().unwrap().warn(w);
     }
     let _ = dbus::SHARED.set(shared.clone());
 
@@ -161,7 +161,7 @@ fn main() {
     if let Some(conn) = bus.as_ref().filter(|_| !test_instance)
         && let Err(e) = dbus::install_focus_script(conn)
     {
-        shared.lock().unwrap().log(format!("Focus tracking unavailable: {e:#}"));
+        shared.lock().unwrap().warn(format!("Focus tracking unavailable: {e:#}"));
     }
 
     let audio_tx = tx.clone();

@@ -67,6 +67,8 @@ pub struct App {
     control_search: String,
     scene_name: String,
     source_filter: String,
+    log_filter: String,
+    log_warnings_only: bool,
     confirm: Option<Confirm>,
     /// Profile being renamed: (id, text).
     profile_rename: Option<(String, String)>,
@@ -124,6 +126,8 @@ impl App {
             scene_name: String::new(),
             rename: None,
             source_filter: String::new(),
+            log_filter: String::new(),
+            log_warnings_only: false,
             led_test: None,
             confirm: None,
             profile_rename: None,
