@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use eframe::egui::{self, RichText, Sense, Stroke, StrokeKind, Vec2, vec2};
 
 use super::App;
-use super::theme::{icon, *};
+use super::theme::{self, icon, *};
 use super::widgets;
 use crate::audio::{AudioState, Kind, MeterKey};
 use crate::engine::{StripView, UiCmd};
@@ -258,16 +258,26 @@ impl App {
         let painter = ui.painter_at(zone.expand(12.0));
         let empty = s.targets.is_empty();
         let hovering = response.dnd_hover_payload::<Target>().is_some();
-        if hovering {
-            widgets::glow(&painter, zone.shrink(2.0), 8.0, pal().accent.gamma_multiply(0.35), 14.0);
-            painter.rect_stroke(zone.shrink(2.0), 8.0, Stroke::new(2.0, pal().accent), StrokeKind::Inside);
+        let hover_t = theme::anim(ui.ctx(), response.id.with("drop"), if hovering { 1.0 } else { 0.0 }, 0.12);
+        if hover_t > 0.0 {
+            widgets::glow(&painter, zone.shrink(2.0), 8.0, pal().accent.gamma_multiply(0.35 * hover_t), 14.0);
+            painter.rect_stroke(
+                zone.shrink(2.0),
+                8.0,
+                Stroke::new(2.0, pal().accent.gamma_multiply(hover_t)),
+                StrokeKind::Inside,
+            );
         } else if dragging {
+            // Free drop targets breathe while something is being dragged.
+            let t = ui.input(|i| i.time) as f32;
+            let breathe = if s.targets.is_empty() { 0.3 + 0.2 * (t * 4.0).sin() } else { 0.25 };
             painter.rect_stroke(
                 zone.shrink(3.0),
                 7.0,
-                Stroke::new(1.0, pal().accent.gamma_multiply(0.35)),
+                Stroke::new(1.0, pal().accent.gamma_multiply(breathe)),
                 StrokeKind::Inside,
             );
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
         }
         if let Some(t) = response.dnd_release_payload::<Target>() {
             self.add_target(&s.id, (*t).clone());

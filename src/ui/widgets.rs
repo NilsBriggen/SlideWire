@@ -90,6 +90,9 @@ pub fn fader(ui: &mut Ui, pos: &mut f32, size: Vec2, color: Color32, ghost: Opti
     if (*pos - before).abs() > f32::EPSILON {
         response.mark_changed();
     }
+    // Glide to values that change elsewhere (hardware, other apps); follow the mouse exactly.
+    let glide = if response.dragged() { 0.0 } else { 0.08 };
+    let shown = theme::anim(ui.ctx(), response.id.with("shown"), *pos, glide);
 
     let painter = ui.painter_at(rect.expand(12.0));
     // Tick marks on both sides.
@@ -105,9 +108,9 @@ pub fn fader(ui: &mut Ui, pos: &mut f32, size: Vec2, color: Color32, ghost: Opti
     painter.rect_filled(track, 3.0, SLOT);
     painter.line_segment([track.left_bottom(), track.right_bottom()], Stroke::new(1.0, pal().sheen(16)));
     // Level fill.
-    let y = track.bottom() - travel * *pos;
+    let y = track.bottom() - travel * shown;
     let fill = Rect::from_min_max(pos2(track.center().x - 1.5, y), pos2(track.center().x + 1.5, track.bottom()));
-    if *pos > 0.0 {
+    if shown > 0.0 {
         glow(&painter, fill, 2.0, color.gamma_multiply(0.5), 8.0);
         painter.rect_filled(fill, 1.5, color);
     }
@@ -181,6 +184,9 @@ pub fn knob(ui: &mut Ui, pos: &mut f32, diameter: f32, color: Color32, ghost: Op
     if (*pos - before).abs() > f32::EPSILON {
         response.mark_changed();
     }
+    // Glide to values that change elsewhere (hardware, other apps); follow the mouse exactly.
+    let glide = if response.dragged() { 0.0 } else { 0.08 };
+    let shown = theme::anim(ui.ctx(), response.id.with("shown"), *pos, glide);
 
     let painter = ui.painter_at(rect.expand(6.0));
     let c = rect.center();
@@ -188,10 +194,10 @@ pub fn knob(ui: &mut Ui, pos: &mut f32, diameter: f32, color: Color32, ghost: Op
     // Angles in screen space (y down): start at 135° (bottom-left), sweep 270°.
     let start = 0.75 * PI;
     let end = start + 1.5 * PI;
-    let value = start + (end - start) * *pos;
+    let value = start + (end - start) * shown;
     let ring_r = r - 3.0;
     painter.add(Shape::line(arc_points(c, ring_r, start, end), Stroke::new(4.0, SLOT)));
-    if *pos > 0.001 {
+    if shown > 0.001 {
         painter.add(Shape::line(arc_points(c, ring_r, start, value), Stroke::new(7.0, color.gamma_multiply(0.25))));
         painter.add(Shape::line(arc_points(c, ring_r, start, value), Stroke::new(3.0, color)));
     }
@@ -219,32 +225,28 @@ pub fn led_button(ui: &mut Ui, label: &str, on: bool, color: Color32, size: Vec2
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let painter = ui.painter_at(rect.expand(10.0));
     let hot = response.hovered();
-    if on {
-        glow(&painter, rect, 5.0, color.gamma_multiply(0.45), 12.0);
-        painter.rect_filled(rect, 5.0, color);
+    let lit = theme::anim(ui.ctx(), response.id.with("lit"), if on { 1.0 } else { 0.0 }, 0.12);
+    // Unlit cap, then the lit cap fading in over it.
+    painter.add(
+        RectShape::filled(rect.translate(vec2(0.0, 2.0)), CornerRadius::same(5), Color32::from_black_alpha(120))
+            .with_blur_width(4.0),
+    );
+    let fill = if hot { Color32::from_rgb(0x33, 0x36, 0x41) } else { Color32::from_rgb(0x27, 0x29, 0x31) };
+    painter.rect_filled(rect, 5.0, fill);
+    painter.rect_stroke(rect, 5.0, Stroke::new(1.0, Color32::from_rgb(0x3a, 0x3d, 0x48)), StrokeKind::Inside);
+    if lit > 0.0 {
+        glow(&painter, rect, 5.0, color.gamma_multiply(0.45 * lit), 12.0);
+        painter.rect_filled(rect, 5.0, color.gamma_multiply(lit));
         gradient_rect(
             &painter,
             rect.shrink2(vec2(1.0, 4.0)),
-            Color32::from_white_alpha(40),
-            Color32::from_black_alpha(10),
-        );
-        painter.text(rect.center(), Align2::CENTER_CENTER, label, semibold(13.0), Color32::from_rgb(0x14, 0x12, 0x10));
-    } else {
-        painter.add(
-            RectShape::filled(rect.translate(vec2(0.0, 2.0)), CornerRadius::same(5), Color32::from_black_alpha(120))
-                .with_blur_width(4.0),
-        );
-        let fill = if hot { Color32::from_rgb(0x33, 0x36, 0x41) } else { Color32::from_rgb(0x27, 0x29, 0x31) };
-        painter.rect_filled(rect, 5.0, fill);
-        painter.rect_stroke(rect, 5.0, Stroke::new(1.0, Color32::from_rgb(0x3a, 0x3d, 0x48)), StrokeKind::Inside);
-        painter.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            label,
-            semibold(13.0),
-            color.gamma_multiply(if hot { 0.9 } else { 0.6 }),
+            Color32::from_white_alpha((40.0 * lit) as u8),
+            Color32::from_black_alpha((10.0 * lit) as u8),
         );
     }
+    let unlit_text = color.gamma_multiply(if hot { 0.9 } else { 0.6 });
+    let text = theme::mix(unlit_text, Color32::from_rgb(0x14, 0x12, 0x10), lit);
+    painter.text(rect.center(), Align2::CENTER_CENTER, label, semibold(13.0), text);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

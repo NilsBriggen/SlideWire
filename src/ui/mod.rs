@@ -196,6 +196,7 @@ impl App {
             ui.label(RichText::new("Slidewire").font(semibold(18.0)));
             ui.add_space(14.0);
 
+            let mut underline = None;
             for (t, ic, label) in [
                 (Tab::Mixer, icon::FADERS, "Mixer"),
                 (Tab::Controller, icon::SLIDERS_HORIZONTAL, "Controller"),
@@ -204,9 +205,22 @@ impl App {
                 (Tab::Settings, icon::GEAR_SIX, "Settings"),
                 (Tab::Log, icon::LIST_BULLETS, "Log"),
             ] {
-                if tab_button(ui, ic, label, self.tab == t).clicked() {
+                let r = tab_button(ui, ic, label, self.tab == t);
+                if r.clicked() {
                     self.tab = t;
                 }
+                if self.tab == t {
+                    underline = Some(r.rect);
+                }
+            }
+            // The underline slides to the selected tab.
+            if let Some(rect) = underline {
+                let id = egui::Id::new("tab-underline");
+                let l = theme::anim(ui.ctx(), id.with("l"), rect.left() + 8.0, 0.16);
+                let r = theme::anim(ui.ctx(), id.with("r"), rect.right() - 8.0, 0.16);
+                let bar = egui::Rect::from_min_max(pos2(l, rect.bottom() - 2.0), pos2(r, rect.bottom()));
+                widgets::glow(ui.painter(), bar, 1.0, pal().accent.gamma_multiply(0.5), 6.0);
+                ui.painter().rect_filled(bar, 1.0, pal().accent);
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -294,7 +308,7 @@ impl App {
     }
 }
 
-/// Page switcher button: icon + label, cyan underline when selected.
+/// Page switcher button: icon + label, tinted when selected.
 fn tab_button(ui: &mut egui::Ui, ic: &str, label: &str, selected: bool) -> egui::Response {
     let text = format!("{ic}  {label}");
     let galley = ui.painter().layout_no_wrap(text, egui::FontId::proportional(14.0), pal().text);
@@ -314,14 +328,6 @@ fn tab_button(ui: &mut egui::Ui, ic: &str, label: &str, selected: bool) -> egui:
         pal().text_dim
     };
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
-    if selected {
-        let bar = egui::Rect::from_min_max(
-            pos2(rect.left() + 8.0, rect.bottom() - 2.0),
-            pos2(rect.right() - 8.0, rect.bottom()),
-        );
-        widgets::glow(ui.painter(), bar, 1.0, pal().accent.gamma_multiply(0.5), 6.0);
-        ui.painter().rect_filled(bar, 1.0, pal().accent);
-    }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

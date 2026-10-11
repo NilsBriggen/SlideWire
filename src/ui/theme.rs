@@ -5,6 +5,7 @@
 //! slots, LEDs, knobs and caps) looks the same in both, like a real console.
 
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Vec2,
@@ -172,6 +173,14 @@ pub fn accent_color(a: Accent, system: Option<[u8; 3]>) -> Color32 {
 }
 
 static PAL: RwLock<Palette> = RwLock::new(DARK);
+static MOTION: AtomicBool = AtomicBool::new(true);
+
+/// `animate_value_with_time`, or the target right away when the user
+/// turned animations off.
+pub fn anim(ctx: &egui::Context, id: egui::Id, target: f32, secs: f32) -> f32 {
+    let secs = if MOTION.load(Ordering::Relaxed) { secs } else { 0.0 };
+    ctx.animate_value_with_time(id, target, secs)
+}
 
 /// The active palette.
 pub fn pal() -> Palette {
@@ -192,6 +201,7 @@ pub fn sync(ctx: &egui::Context, settings: &Settings) {
         *PAL.write().unwrap() = want;
         apply_visuals(ctx, &want);
     }
+    MOTION.store(!settings.reduce_motion, Ordering::Relaxed);
     let motion = if settings.reduce_motion { 0.0 } else { 0.12 };
     if ctx.global_style().animation_time != motion {
         ctx.global_style_mut(|s| s.animation_time = motion);
