@@ -4,13 +4,20 @@ use anyhow::{Result, anyhow, bail};
 
 /// Run a shell command detached from us.
 pub fn run_command(cmd: &str) -> Result<()> {
-    std::process::Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
+    spawn_detached(std::process::Command::new("sh").arg("-c").arg(cmd))
+}
+
+/// Start a program without waiting for it. A thread waits instead, so it
+/// doesn't linger as a zombie when it exits.
+pub fn spawn_detached(cmd: &mut std::process::Command) -> Result<()> {
+    let mut child = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()?;
+    std::thread::Builder::new().name("reaper".into()).spawn(move || {
+        let _ = child.wait();
+    })?;
     Ok(())
 }
 

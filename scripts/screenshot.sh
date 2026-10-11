@@ -45,7 +45,7 @@ sleep 1
 CFG="$WORK/cfg"
 mkdir -p "$CFG/profiles"
 # Let the app write its default profile with a short run, then adjust it.
-env -u WAYLAND_DISPLAY DISPLAY=$DISP SLIDEWIRE_CONFIG="$CFG" SLIDEWIRE_INSTANCE=shot \
+env -u WAYLAND_DISPLAY DISPLAY=$DISP SLIDEWIRE_CONFIG="$CFG" SLIDEWIRE_INSTANCE=shot SLIDEWIRE_DEFAULT_PORT=FakeNano \
     timeout 3 ./target/debug/slidewire --minimized >/dev/null 2>&1 || true
 python3 - "$CFG" "${SETTINGS:-{\}}" <<'EOF'
 import json, glob, os, sys

@@ -209,9 +209,12 @@ mod erased {
 pub fn start(tx: Sender<Event>) -> Result<Option<Connection>> {
     let svc = Service { tx, own_pid: std::process::id() as i32 };
     let name = bus_name();
-    let built = zbus::blocking::connection::Builder::session()?.name(name.as_str())?.serve_at(PATH, svc)?.build();
-    match built {
-        Ok(conn) => Ok(Some(conn)),
+    let conn = zbus::blocking::connection::Builder::session()?.serve_at(PATH, svc)?.build()?;
+    // Without DoNotQueue a second copy would wait in line for the name and
+    // carry on as if it were the only one.
+    let flags = zbus::fdo::RequestNameFlags::DoNotQueue.into();
+    match conn.request_name_with_flags(name.as_str(), flags) {
+        Ok(_) => Ok(Some(conn)),
         Err(zbus::Error::NameTaken) => {
             let conn = Connection::session()?;
             conn.call_method(Some(name.as_str()), PATH, Some(IFACE), "Show", &())?;

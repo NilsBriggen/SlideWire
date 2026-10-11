@@ -11,6 +11,8 @@ use crate::profile::Profile;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
+    /// Format version, for migrations ([`SETTINGS_VERSION`]).
+    pub version: u32,
     pub start_minimized: bool,
     /// Volume curve exponent: 1.0 = linear in PulseAudio's (already
     /// perceptual) volume scale; higher values give finer control at low
@@ -78,9 +80,14 @@ impl Accent {
     }
 }
 
+/// The current settings format. Files without a version are from before 1.0
+/// and need nothing changed.
+pub const SETTINGS_VERSION: u32 = 1;
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            version: SETTINGS_VERSION,
             start_minimized: false,
             curve: 1.0,
             osd: true,
@@ -129,41 +136,69 @@ impl Store {
         let mut warnings = Vec::new();
         let settings_path = dir.join("settings.json");
         let first_run = !settings_path.exists();
-        let settings = match std::fs::read_to_string(&settings_path) {
+        let mut settings = match std::fs::read_to_string(&settings_path) {
             Err(_) => Settings::default(),
-            Ok(text) => match serde_json::from_str(&text) {
+            Ok(text) => match serde_json::from_str::<Settings>(&text) {
                 Ok(s) => s,
                 Err(e) => {
                     // Keep the broken file so nothing is lost when defaults are saved.
                     let keep = settings_path.with_extension("json.broken");
                     let _ = std::fs::copy(&settings_path, &keep);
+                    let backup = std::fs::read_to_string(settings_path.with_extension("json.bak"))
+                        .ok()
+                        .and_then(|t| serde_json::from_str::<Settings>(&t).ok());
+                    let used = if backup.is_some() { "the previous version" } else { "defaults" };
                     warnings.push(format!(
-                        "settings.json is invalid ({e}); using defaults. The old file was kept as {}",
+                        "settings.json is invalid ({e}); using {used}. The broken file was kept as {}",
                         keep.display()
                     ));
-                    Settings::default()
+                    backup.unwrap_or_default()
                 }
             },
         };
+        settings.version = SETTINGS_VERSION;
+        // Files from before they were written owner-only.
+        for f in [settings_path.clone(), settings_path.with_extension("json.bak")] {
+            if f.exists() {
+                let _ = restrict(&f);
+            }
+        }
         let mut profiles = IndexMap::new();
         if let Ok(rd) = std::fs::read_dir(dir.join("profiles")) {
             let mut paths: Vec<PathBuf> =
                 rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
             paths.sort();
             for p in paths {
+                let id = p.file_stem().unwrap().to_string_lossy().to_string();
                 match Profile::load(&p) {
                     Ok(prof) => {
-                        let id = p.file_stem().unwrap().to_string_lossy().to_string();
                         profiles.insert(id, prof);
                     }
-                    Err(e) => warnings.push(format!("Skipping profile {}: {e:#}", p.display())),
+                    Err(e) => match Profile::load(&p.with_extension("json.bak")) {
+                        Ok(prof) => {
+                            warnings.push(format!(
+                                "Profile {} couldn't be read ({e:#}); using its previous version",
+                                p.display()
+                            ));
+                            let _ = std::fs::copy(&p, p.with_extension("json.broken"));
+                            profiles.insert(id, prof);
+                        }
+                        Err(_) => warnings.push(format!("Skipping profile {}: {e:#}", p.display())),
+                    },
                 }
             }
         }
         let mut store = Store { dir, settings, profiles, warnings, first_run };
         if store.profiles.is_empty() {
             let id = crate::profile::new_id();
-            store.profiles.insert(id.clone(), Profile::nanokontrol2());
+            let mut p = Profile::nanokontrol2();
+            // Test runs point the default profile at a fake device, so they
+            // never talk to a real controller.
+            if let Some(port) = env("DEFAULT_PORT") {
+                p.input = port.clone();
+                p.output = port;
+            }
+            store.profiles.insert(id.clone(), p);
             store.settings.active_profile = Some(id.clone());
             let _ = store.save_profile(&id);
             let _ = store.save_settings();
@@ -188,9 +223,14 @@ impl Store {
         }
     }
 
-    pub fn import(&mut self, path: &Path) -> Result<String> {
+    /// Add the profile at `path`. Buttons that run commands or press keys
+    /// are kept only when `trusted`.
+    pub fn import(&mut self, path: &Path, trusted: bool) -> Result<String> {
         let mut p = Profile::load(path)?;
         p.preset = false;
+        if !trusted {
+            p.disarm();
+        }
         let id = crate::profile::new_id();
         self.profiles.insert(id.clone(), p);
         self.save_profile(&id)?;
@@ -242,15 +282,32 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Write via a temporary file and rename, keeping the previous version as `.bak`.
+/// Write via a temporary file and rename, keeping the previous version as
+/// `.bak`. Only the user can read the files: settings hold the OBS password.
 pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, content).with_context(|| format!("writing {}", tmp.display()))?;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    f.write_all(content.as_bytes()).and_then(|_| f.sync_all()).with_context(|| format!("writing {}", tmp.display()))?;
     if path.exists() {
-        let _ = std::fs::copy(path, path.with_extension("json.bak"));
+        let bak = path.with_extension("json.bak");
+        let _ = std::fs::copy(path, &bak);
+        let _ = restrict(&bak);
     }
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+fn restrict(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
 }
 
 const DESKTOP_ENTRY: &str = "[Desktop Entry]
@@ -320,18 +377,38 @@ mod tests {
 
     #[test]
     fn broken_settings_are_kept() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("slidewire-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("settings.json"), "{ \"curve\": 2.0, oops").unwrap();
         // SAFETY: no other test reads or writes the environment.
         unsafe { std::env::set_var("SLIDEWIRE_CONFIG", &dir) };
         let store = Store::load();
-        unsafe { std::env::remove_var("SLIDEWIRE_CONFIG") };
         assert_eq!(store.warnings.len(), 1, "{:?}", store.warnings);
         assert!(dir.join("settings.json.broken").exists());
         // The default profile was written, and saving settings left a backup.
         assert_eq!(store.profiles.len(), 1);
         assert!(dir.join("settings.json.bak").exists());
+        // Settings hold a password: only the user may read them.
+        let mode = std::fs::metadata(dir.join("settings.json")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+
+        // A broken file with a good backup: the backup is used.
+        let mut good = Settings { curve: 2.5, ..Default::default() };
+        good.obs_url = "ws://example:1".into();
+        std::fs::write(dir.join("settings.json.bak"), serde_json::to_string(&good).unwrap()).unwrap();
+        std::fs::write(dir.join("settings.json"), "nope").unwrap();
+        // So is a profile's.
+        let (id, _) = store.profiles.first().unwrap();
+        let profile = dir.join("profiles").join(format!("{id}.json"));
+        std::fs::copy(&profile, profile.with_extension("json.bak")).unwrap();
+        std::fs::write(&profile, "{ broken").unwrap();
+        let store = Store::load();
+        unsafe { std::env::remove_var("SLIDEWIRE_CONFIG") };
+        assert_eq!(store.settings.curve, 2.5);
+        assert_eq!(store.settings.obs_url, "ws://example:1");
+        assert_eq!(store.profiles.len(), 1, "{:?}", store.warnings);
+        assert_eq!(store.warnings.len(), 2, "{:?}", store.warnings);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

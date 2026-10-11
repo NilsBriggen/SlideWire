@@ -268,6 +268,7 @@ impl App {
                             .into(),
                     button: "Delete profile".into(),
                     action: super::ConfirmAction::DeleteProfile(arg),
+                    alt: None,
                 });
             }
             "new" | "nano" => {
@@ -286,15 +287,25 @@ impl App {
                 }
             }
             "import" => {
-                let res = sh.store.import(std::path::Path::new(&arg));
                 drop(sh);
-                match res {
-                    Ok(id) => {
-                        self.flash("Profile imported");
-                        self.send(UiCmd::ActivateProfile(id));
-                        self.import_path.clear();
-                    }
-                    Err(e) => self.flash(format!("Import failed: {e:#}")),
+                // Ask before keeping buttons that would run commands.
+                let risky = Profile::load(std::path::Path::new(&arg)).map(|p| p.risky_buttons()).unwrap_or_default();
+                if risky.is_empty() {
+                    self.import_profile(&arg, false);
+                } else {
+                    self.confirm = Some(super::Confirm {
+                        title: "This profile runs commands".into(),
+                        body: format!(
+                            "{}\n\nOnly keep these if you trust where the profile came from.",
+                            risky.join("\n")
+                        ),
+                        button: "Keep them".into(),
+                        action: super::ConfirmAction::Import { path: arg.clone(), trusted: true },
+                        alt: Some((
+                            "Import without them".into(),
+                            super::ConfirmAction::Import { path: arg, trusted: false },
+                        )),
+                    });
                 }
             }
             _ => {}
@@ -432,7 +443,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(dir.display().to_string()).font(mono(12.0)).color(pal().text_dim));
                 if ui.small_button(format!("{}  Open", icon::FOLDER_OPEN)).clicked()
-                    && let Err(e) = std::process::Command::new("xdg-open").arg(&dir).spawn()
+                    && let Err(e) = crate::actions::spawn_detached(std::process::Command::new("xdg-open").arg(&dir))
                 {
                     self.flash(format!("Couldn't open the folder: {e}"));
                 }

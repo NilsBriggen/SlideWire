@@ -65,11 +65,18 @@ pub(super) struct Confirm {
     pub body: String,
     pub button: String,
     pub action: ConfirmAction,
+    /// A second, safe choice next to the destructive one.
+    pub alt: Option<(String, ConfirmAction)>,
 }
 
 pub(super) enum ConfirmAction {
     DeleteProfile(String),
     RemoveBank(usize),
+    /// Import a profile; `trusted` keeps its command and key buttons.
+    Import {
+        path: String,
+        trusted: bool,
+    },
 }
 
 pub struct App {
@@ -606,32 +613,54 @@ impl App {
                 let danger =
                     egui::Button::new(RichText::new(&c.button).color(Color32::WHITE)).fill(MUTE.gamma_multiply(0.85));
                 if ui.add(danger).clicked() {
-                    answer = Some(true);
+                    answer = Some(1);
+                }
+                if let Some((label, _)) = &c.alt
+                    && ui.add(egui::Button::new(RichText::new(label).strong()).fill(pal().accent_bg)).clicked()
+                {
+                    answer = Some(2);
                 }
                 if ui.button("Cancel").clicked() {
-                    answer = Some(false);
+                    answer = Some(0);
                 }
             });
         });
         if modal.should_close() && answer.is_none() {
-            answer = Some(false);
+            answer = Some(0);
         }
-        match answer {
-            Some(true) => {
-                let action = self.confirm.take().unwrap().action;
-                match action {
-                    ConfirmAction::DeleteProfile(id) => {
-                        let mut sh = self.shared.lock().unwrap();
-                        sh.store.delete_profile(&id);
-                        let _ = sh.store.save_settings();
-                        drop(sh);
-                        self.send(UiCmd::ProfileEdited);
-                    }
-                    ConfirmAction::RemoveBank(i) => self.edit_profile(|p| p.remove_bank(i)),
-                }
+        let Some(answer) = answer else { return };
+        let c = self.confirm.take().unwrap();
+        let action = match answer {
+            1 => c.action,
+            2 => match c.alt {
+                Some((_, a)) => a,
+                None => return,
+            },
+            _ => return,
+        };
+        match action {
+            ConfirmAction::DeleteProfile(id) => {
+                let mut sh = self.shared.lock().unwrap();
+                sh.store.delete_profile(&id);
+                let _ = sh.store.save_settings();
+                drop(sh);
+                self.send(UiCmd::ProfileEdited);
             }
-            Some(false) => self.confirm = None,
-            None => {}
+            ConfirmAction::RemoveBank(i) => self.edit_profile(|p| p.remove_bank(i)),
+            ConfirmAction::Import { path, trusted } => self.import_profile(&path, trusted),
+        }
+    }
+
+    /// Add a profile from a file and switch to it.
+    pub(super) fn import_profile(&mut self, path: &str, trusted: bool) {
+        let res = self.shared.lock().unwrap().store.import(std::path::Path::new(path), trusted);
+        match res {
+            Ok(id) => {
+                self.flash("Profile imported");
+                self.send(UiCmd::ActivateProfile(id));
+                self.import_path.clear();
+            }
+            Err(e) => self.flash(format!("Import failed: {e:#}")),
         }
     }
 }

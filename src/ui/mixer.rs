@@ -166,6 +166,7 @@ impl App {
                         body: format!("Everything assigned in bank {} is removed.", i + 1),
                         button: label.into(),
                         action: super::ConfirmAction::RemoveBank(i),
+                        alt: None,
                     });
                     ui.close();
                 }

