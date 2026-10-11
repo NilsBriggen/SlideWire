@@ -18,8 +18,10 @@ jobs:
             build-essential pkg-config curl ca-certificates python3 git \
             libasound2-dev libpulse-dev desktop-file-utils appstream
       - name: Rust
+        # Pinned: a newer rustfmt or clippy would fail on code that was fine
+        # yesterday. Raise it on purpose, together with any fixes.
         run: |
-          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component rustfmt,clippy
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.0 --component rustfmt,clippy
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
@@ -51,7 +53,7 @@ jobs:
             build-essential pkg-config curl ca-certificates python3 jq libasound2-dev libpulse-dev
       - name: Rust
         run: |
-          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.0
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Build the release archive
         run: scripts/release-tarball.sh
