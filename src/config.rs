@@ -365,16 +365,84 @@ fn restrict(path: &Path) -> std::io::Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
 }
 
-const DESKTOP_ENTRY: &str = "[Desktop Entry]
-Type=Application
-Name=Slidewire
-Comment=Control application and device volumes with a MIDI controller
-Icon=slidewire
-Categories=AudioVideo;Audio;Mixer;
-";
+/// The packaged desktop entry.
+const DESKTOP_FILE: &str = include_str!("../packaging/dev.briggen.Slidewire.desktop");
+
+/// The desktop entry, starting this executable with `args`.
+fn desktop_entry(args: &str) -> Result<String> {
+    let exe = std::env::current_exe()?;
+    let lines: Vec<String> = DESKTOP_FILE
+        .lines()
+        .map(|l| if l.starts_with("Exec=") { format!("Exec=\"{}\"{args}", exe.display()) } else { l.to_string() })
+        .collect();
+    Ok(lines.join("\n") + "\n")
+}
+
+fn data_dir() -> Result<PathBuf> {
+    Ok(directories::BaseDirs::new().context("no home directory")?.data_dir().to_path_buf())
+}
+
+/// Add a menu entry and the icon for this user (for builds without a package).
+pub fn install_desktop_files() -> Result<PathBuf> {
+    let data = data_dir()?;
+    let icon_dir = data.join("icons/hicolor/scalable/apps");
+    std::fs::create_dir_all(&icon_dir)?;
+    std::fs::write(icon_dir.join(format!("{}.svg", crate::APP_ID)), crate::icon::svg())?;
+    let apps = data.join("applications");
+    std::fs::create_dir_all(&apps)?;
+    let entry = apps.join(format!("{}.desktop", crate::APP_ID));
+    std::fs::write(&entry, desktop_entry("")?)?;
+    Ok(entry)
+}
+
+/// Undo `--install-icon` and autostart. Returns what was removed. The
+/// settings stay; their folder is named so the user can delete it.
+pub fn uninstall() -> Result<Vec<String>> {
+    let data = data_dir()?;
+    let mut removed = Vec::new();
+    let mut files = vec![
+        data.join(format!("applications/{}.desktop", crate::APP_ID)),
+        data.join(format!("icons/hicolor/scalable/apps/{}.svg", crate::APP_ID)),
+        data.join("applications/slidewire.desktop"),
+        data.join("icons/hicolor/scalable/apps/slidewire.svg"),
+    ];
+    if let Some(p) = autostart_path() {
+        files.push(p.with_file_name("slidewire.desktop"));
+        files.push(p);
+    }
+    for f in files {
+        if f.exists() {
+            std::fs::remove_file(&f)?;
+            removed.push(f.display().to_string());
+        }
+    }
+    if systemd_unit() && autostart_enabled_now() {
+        set_autostart(false)?;
+        removed.push("systemd autostart (slidewire.service)".into());
+    }
+    Ok(removed)
+}
+
+/// Before 1.0 the desktop entry, icon and autostart file were named
+/// `slidewire`; rename them to the app id.
+pub fn migrate_desktop_files() {
+    let Ok(data) = data_dir() else { return };
+    let old_entry = data.join("applications/slidewire.desktop");
+    if old_entry.exists() {
+        let _ = std::fs::remove_file(&old_entry);
+        let _ = std::fs::remove_file(data.join("icons/hicolor/scalable/apps/slidewire.svg"));
+        let _ = install_desktop_files();
+    }
+    if let Some(old) = autostart_path().map(|p| p.with_file_name("slidewire.desktop"))
+        && old.exists()
+    {
+        let _ = std::fs::remove_file(&old);
+        let _ = set_autostart(true);
+    }
+}
 
 fn autostart_path() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|b| b.config_dir().join("autostart").join("slidewire.desktop"))
+    directories::BaseDirs::new().map(|b| b.config_dir().join("autostart").join(format!("{}.desktop", crate::APP_ID)))
 }
 
 /// The systemd user unit the package installs; when present, autostart
@@ -382,7 +450,8 @@ fn autostart_path() -> Option<PathBuf> {
 const SYSTEMD_UNIT: &str = "/usr/lib/systemd/user/slidewire.service";
 
 fn systemd_unit() -> bool {
-    std::path::Path::new(SYSTEMD_UNIT).exists()
+    // Test instances leave the user's real service alone.
+    std::path::Path::new(SYSTEMD_UNIT).exists() && env("INSTANCE").is_none()
 }
 
 /// `systemctl --user is-enabled` is a process spawn, so it runs once in the
@@ -399,16 +468,20 @@ pub fn autostart_enabled() -> bool {
         }
         if !SYSTEMD_ASKED.swap(true, std::sync::atomic::Ordering::SeqCst) {
             std::thread::spawn(|| {
-                let on = std::process::Command::new("systemctl")
-                    .args(["--user", "is-enabled", "--quiet", "slidewire.service"])
-                    .status()
-                    .is_ok_and(|s| s.success());
-                *SYSTEMD_ENABLED.lock().unwrap() = Some(on);
+                *SYSTEMD_ENABLED.lock().unwrap() = Some(autostart_enabled_now());
             });
         }
         return false;
     }
     autostart_path().is_some_and(|p| p.exists())
+}
+
+/// Ask systemd now (blocking; for the command line).
+fn autostart_enabled_now() -> bool {
+    std::process::Command::new("systemctl")
+        .args(["--user", "is-enabled", "--quiet", "slidewire.service"])
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// [`set_autostart`] on a worker thread; `report` gets the error, if any.
@@ -441,9 +514,8 @@ pub fn set_autostart(on: bool) -> Result<()> {
         return Ok(());
     }
     if on {
-        let exe = std::env::current_exe()?;
         std::fs::create_dir_all(path.parent().unwrap())?;
-        std::fs::write(&path, format!("{DESKTOP_ENTRY}Exec=\"{}\" --minimized\n", exe.display()))?;
+        std::fs::write(&path, desktop_entry(" --minimized")?)?;
     } else if path.exists() {
         std::fs::remove_file(path)?;
     }

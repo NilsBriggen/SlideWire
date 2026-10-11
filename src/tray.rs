@@ -20,7 +20,7 @@ impl ksni::Tray for Tray {
         "Slidewire".into()
     }
     fn icon_name(&self) -> String {
-        "slidewire".into()
+        crate::APP_ID.into()
     }
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         vec![crate::icon::tray_icon()]

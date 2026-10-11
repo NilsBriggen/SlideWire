@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Slidewire
-Comment=Control application and device volumes with a MIDI controller
-Exec=slidewire
-Icon=slidewire
-Categories=AudioVideo;Audio;Mixer;
-Keywords=midi;volume;mixer;fader;nanokontrol;
-StartupWMClass=slidewire

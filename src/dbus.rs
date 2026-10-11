@@ -32,9 +32,12 @@ fn find_strip(name: &str) -> zbus::fdo::Result<crate::engine::StripView> {
         .ok_or_else(|| failed(format!("no strip called \"{name}\" (see `slidewire strips`)")))
 }
 
-pub const BUS_NAME: &str = "dev.slidewire.Slidewire";
-const PATH: &str = "/dev/slidewire/Slidewire";
-const IFACE: &str = "dev.slidewire.Slidewire";
+pub const BUS_NAME: &str = crate::APP_ID;
+const PATH: &str = "/dev/briggen/Slidewire";
+const IFACE: &str = crate::APP_ID;
+/// The name before 1.0, still owned by a copy that was running when the
+/// app was updated.
+const OLD_BUS_NAME: &str = "dev.slidewire.Slidewire";
 const KWIN_SCRIPT: &str = "slidewire-focus";
 
 struct Service {
@@ -42,7 +45,7 @@ struct Service {
     own_pid: i32,
 }
 
-#[zbus::interface(name = "dev.slidewire.Slidewire")]
+#[zbus::interface(name = "dev.briggen.Slidewire")]
 impl Service {
     /// Called by our KWin script whenever the active window changes.
     fn activated(&self, pid: i32, caption: String, class: String) {
@@ -209,6 +212,14 @@ mod erased {
 pub fn start(tx: Sender<Event>) -> Result<Option<Connection>> {
     let svc = Service { tx, own_pid: std::process::id() as i32 };
     let name = bus_name();
+    if name == BUS_NAME {
+        // An older version still running: show it rather than start twice.
+        let conn = Connection::session()?;
+        if has_owner(&conn, OLD_BUS_NAME) {
+            let _ = conn.call_method(Some(OLD_BUS_NAME), "/dev/slidewire/Slidewire", Some(OLD_BUS_NAME), "Show", &());
+            return Ok(None);
+        }
+    }
     let conn = zbus::blocking::connection::Builder::session()?.serve_at(PATH, svc)?.build()?;
     // Without DoNotQueue a second copy would wait in line for the name and
     // carry on as if it were the only one.

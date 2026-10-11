@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Slidewire
+GenericName=MIDI Volume Mixer
+Comment=Control application and device volumes with a MIDI controller
+Exec=slidewire
+Icon=dev.briggen.Slidewire
+Categories=AudioVideo;Audio;Mixer;
+Keywords=midi;volume;mixer;fader;nanokontrol;controller;
+StartupWMClass=dev.briggen.Slidewire
+StartupNotify=true
+SingleMainWindow=true

@@ -46,6 +46,8 @@ OPTIONS:
     --monitor [PATTERN]  print incoming MIDI messages (from ports matching PATTERN)
     --doctor [PATTERN]   check why a controller doesn't show up (default: nanoKONTROL2)
     --install-icon       install the icon and a desktop entry for the current user
+    --uninstall          remove what --install-icon and autostart added
+    -V, --version        print the version
     -h, --help           show this help
 
 CONTROL THE RUNNING APP (for scripts and keyboard shortcuts):
@@ -104,9 +106,33 @@ fn main() {
                 return;
             }
             "--install-icon" => {
-                if let Err(e) = install_desktop_files() {
-                    eprintln!("{e:#}");
-                    std::process::exit(1);
+                match config::install_desktop_files() {
+                    Ok(entry) => println!("Installed {} and the icon.", entry.display()),
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+            "--uninstall" => {
+                match config::uninstall() {
+                    Ok(removed) => {
+                        for r in &removed {
+                            println!("removed {r}");
+                        }
+                        if removed.is_empty() {
+                            println!("Nothing to remove.");
+                        }
+                        println!(
+                            "Your settings are in {}; delete that folder to remove them too.",
+                            config::Store::config_dir().display()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        std::process::exit(1);
+                    }
                 }
                 return;
             }
@@ -139,6 +165,9 @@ fn main() {
         }
     };
 
+    if crate::config::env("INSTANCE").is_none() {
+        std::thread::spawn(config::migrate_desktop_files);
+    }
     let mut store = config::Store::load();
     minimized |= store.settings.start_minimized;
     let warnings = std::mem::take(&mut store.warnings);
@@ -305,7 +334,7 @@ fn run_window(
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Slidewire")
-            .with_app_id("slidewire")
+            .with_app_id(APP_ID)
             .with_inner_size([1040.0, 720.0])
             .with_min_inner_size([560.0, 400.0])
             .with_icon(Arc::new(icon::window_icon())),
@@ -319,24 +348,4 @@ fn run_window(
     if let Err(e) = result {
         eprintln!("window: {e}");
     }
-}
-
-fn install_desktop_files() -> anyhow::Result<()> {
-    let base = directories::BaseDirs::new().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
-    let data = base.data_dir();
-    let icon_dir = data.join("icons/hicolor/scalable/apps");
-    std::fs::create_dir_all(&icon_dir)?;
-    std::fs::write(icon_dir.join("slidewire.svg"), icon::svg())?;
-    let apps = data.join("applications");
-    std::fs::create_dir_all(&apps)?;
-    let exe = std::env::current_exe()?;
-    std::fs::write(
-        apps.join("slidewire.desktop"),
-        format!(
-            "[Desktop Entry]\nType=Application\nName=Slidewire\nComment=Control application and device volumes with a MIDI controller\nExec=\"{}\"\nIcon=slidewire\nCategories=AudioVideo;Audio;Mixer;\nStartupWMClass=slidewire\n",
-            exe.display()
-        ),
-    )?;
-    println!("Installed {} and the slidewire icon.", apps.join("slidewire.desktop").display());
-    Ok(())
 }
