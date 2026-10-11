@@ -51,6 +51,15 @@ impl Msg {
             format!("{} ch{} = {}", self.command.label(), self.channel + 1, self.value())
         }
     }
+
+    /// Where it came from, without the value: "CC 60 on channel 1".
+    pub fn address(&self) -> String {
+        if self.command.has_control() {
+            format!("{} {} on channel {}", self.command.label(), self.data1, self.channel + 1)
+        } else {
+            format!("{} on channel {}", self.command.label(), self.channel + 1)
+        }
+    }
 }
 
 /// What a control did, after interpreting the raw message.

@@ -218,6 +218,52 @@ impl App {
         self.send(UiCmd::ProfileEdited);
     }
 
+    /// Start learning control `cid`: the next message from the controller
+    /// becomes its MIDI address.
+    pub(super) fn learn(&self, cid: &str) {
+        let mut sh = self.shared.lock().unwrap();
+        sh.learn = Some(crate::engine::LearnRequest { control_id: cid.to_string() });
+        sh.repaint();
+    }
+
+    /// While learning: a bar on every page saying what to touch.
+    fn learn_bar(&mut self, ui: &mut egui::Ui) {
+        let (learn, name) = {
+            let sh = self.shared.lock().unwrap();
+            let name = sh.learn.as_ref().and_then(|l| sh.active().map(|p| p.control_name(&l.control_id)));
+            (sh.learn.clone(), name)
+        };
+        let Some(_) = learn else { return };
+        let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let mut stop = cancel;
+        egui::Panel::top("learn")
+            .frame(egui::Frame::new().fill(ASSIGN.gamma_multiply(0.18)).inner_margin(egui::Margin::symmetric(16, 8)))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let t = ui.input(|i| i.time) as f32;
+                    let pulse = 0.6 + 0.4 * (t * 4.0).sin().abs();
+                    ui.label(RichText::new(icon::CROSSHAIR).color(ASSIGN.gamma_multiply(pulse)).size(16.0));
+                    ui.label(
+                        RichText::new(format!(
+                            "Move or press the control for {} on your controller…",
+                            name.as_deref().unwrap_or("this")
+                        ))
+                        .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Cancel").clicked() {
+                            stop = true;
+                        }
+                        widgets::hint(ui, "Esc cancels");
+                    });
+                });
+                ui.ctx().request_repaint_after(Duration::from_millis(50));
+            });
+        if stop {
+            self.shared.lock().unwrap().learn = None;
+        }
+    }
+
     /// Change settings from outside the Settings page (buses, routes).
     fn edit_settings(&self, f: impl FnOnce(&mut crate::config::Settings)) {
         f(&mut self.shared.lock().unwrap().store.settings);
@@ -699,6 +745,8 @@ impl eframe::App for App {
                     .stroke(Stroke::new(1.0, pal().border)),
             )
             .show(ui, |ui| self.top_bar(ui));
+
+        self.learn_bar(ui);
 
         if self.tab == Tab::Mixer && self.show_sources {
             egui::Panel::right("sources")

@@ -613,6 +613,7 @@ impl App {
         self.target_menu(ui, &s.id, audio);
         ui.separator();
         self.identity_menu(ui, s, audio);
+        self.relearn_menu(ui, &s.id);
         ui.horizontal(|ui| {
             ui.label("Show as");
             let gid = s.id.clone();
@@ -621,6 +622,39 @@ impl App {
             }
             if ui.selectable_label(s.knob, "Knob").clicked() {
                 self.edit_profile(|p| p.assignments.entry(gid).or_default().widget = Some(Widget::Knob));
+            }
+        });
+    }
+
+    /// Point the strip's fader or buttons at different controls by touching them.
+    fn relearn_menu(&mut self, ui: &mut egui::Ui, gid: &str) {
+        let controls: Vec<(String, String)> = {
+            let sh = self.shared.lock().unwrap();
+            let Some(p) = sh.active() else { return };
+            let Some(g) = p.groups.get(gid) else { return };
+            let roles = [
+                ("Fader or knob", &g.faders),
+                ("Mute button", &g.mute),
+                ("Assign button", &g.assign),
+                ("Run button", &g.run),
+            ];
+            roles
+                .iter()
+                .flat_map(|(role, ids)| {
+                    ids.iter().map(move |id| (id.clone(), format!("{role}: {}", p.control_name(id))))
+                })
+                .collect()
+        };
+        if controls.is_empty() {
+            return;
+        }
+        ui.menu_button(format!("{}  Learn controls", icon::CROSSHAIR), |ui| {
+            widgets::hint(ui, "Pick one, then touch the control on your controller.");
+            for (id, label) in controls {
+                if ui.button(label).clicked() {
+                    self.learn(&id);
+                    ui.close();
+                }
             }
         });
     }

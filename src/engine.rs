@@ -594,9 +594,11 @@ impl Engine {
                 if c.max_value.is_some_and(|m| m > c.command.default_max()) {
                     c.max_value = None;
                 }
+                let name = c.name.clone();
                 sh.learn = None;
                 sh.store.touch(&id);
                 sh.log(format!("Learned {}", msg.describe()));
+                sh.notify(Notice::Info(format!("{name} is now {}", msg.address())));
             }
             sh.repaint();
             return;
@@ -953,6 +955,9 @@ impl Engine {
         self.hw_pos.clear();
         self.waiting.clear();
         self.sent.clear();
+        // A focus rule's way back belongs to the old profile.
+        self.auto_active = None;
+        self.auto_restore_at = None;
         self.scan_ports();
     }
 

@@ -10,7 +10,7 @@ use super::{App, PickPurpose, Tab};
 use crate::audio::AudioState;
 use crate::config::{self, Settings};
 use crate::engine::{Event, Notice, UiCmd};
-use crate::profile::{ButtonAction, MediaKey, Profile, Target};
+use crate::profile::{AppMatch, AutoAction, AutoRule, ButtonAction, MediaKey, Profile, Target};
 
 impl App {
     pub(super) fn buttons(&mut self, ui: &mut egui::Ui) {
@@ -32,6 +32,7 @@ impl App {
         ui.add_space(8.0);
         let spare = p.spare_buttons();
         let mut press = None;
+        let mut learn: Option<String> = None;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             if spare.is_empty() {
                 widgets::card(ui, icon::INFO, "No spare buttons", |ui| {
@@ -67,9 +68,17 @@ impl App {
                             let action = p.buttons.entry(cid.clone()).or_default();
                             action_editor(ui, cid, action, &audio, &profiles, &scenes);
                             ui.add_space(4.0);
-                            if widgets::icon_button(ui, icon::PLAY, "Try it").clicked() {
-                                press = Some(cid.clone());
-                            }
+                            ui.horizontal(|ui| {
+                                if widgets::icon_button(ui, icon::PLAY, "Try it").clicked() {
+                                    press = Some(cid.clone());
+                                }
+                                if widgets::icon_button(ui, icon::CROSSHAIR, "Learn")
+                                    .on_hover_text("Press the button on your controller to set which one this is")
+                                    .clicked()
+                                {
+                                    learn = Some(cid.clone());
+                                }
+                            });
                         });
                     });
                     if (i + 1) % cols == 0 {
@@ -85,6 +94,9 @@ impl App {
         }
         if let Some(cid) = press {
             self.send(UiCmd::Press(cid));
+        }
+        if let Some(cid) = learn {
+            self.learn(&cid);
         }
     }
 
@@ -125,6 +137,102 @@ impl App {
         if r.double_clicked() {
             self.profile_rename = Some((id.to_string(), name.to_string()));
         }
+    }
+
+    /// Focus rules of the active profile: switch bank or scene while an app
+    /// is in front.
+    fn auto_card(&mut self, ui: &mut egui::Ui) {
+        let (rules, banks, scenes, apps) = {
+            let sh = self.shared.lock().unwrap();
+            let Some(p) = sh.active() else { return };
+            let mut apps: Vec<(String, String)> =
+                sh.audio.apps.iter().map(|a| (a.display_name(), a.pattern())).collect();
+            apps.sort();
+            apps.dedup();
+            (p.auto.clone(), p.bank_count(), p.scenes.keys().cloned().collect::<Vec<_>>(), apps)
+        };
+        widgets::card(ui, icon::APP_WINDOW, "When an app has focus", |ui| {
+            widgets::hint(
+                ui,
+                "Switch to a bank or recall a scene while an app is in front, and back when you leave it.",
+            );
+            let mut remove = None;
+            let mut change = None;
+            for (i, r) in rules.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let name = if r.label.is_empty() { &r.app.pattern } else { &r.label };
+                    let layout = egui::Layout::left_to_right(egui::Align::Center);
+                    ui.allocate_ui_with_layout(vec2(150.0, 22.0), layout, |ui| {
+                        ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
+                            .on_hover_text(format!("Matches \"{}\"", r.app.pattern));
+                    });
+                    ui.label(RichText::new(icon::ARROW_RIGHT).color(pal().text_dim));
+                    let text = match &r.action {
+                        AutoAction::Bank { bank } => format!("Bank {}", bank + 1),
+                        AutoAction::Scene { name } => format!("Scene \"{name}\""),
+                    };
+                    egui::ComboBox::from_id_salt(("auto", i)).selected_text(text).width(170.0).show_ui(ui, |ui| {
+                        for b in 0..banks {
+                            let a = AutoAction::Bank { bank: b };
+                            if ui.selectable_label(r.action == a, format!("Bank {}", b + 1)).clicked() {
+                                change = Some((i, a));
+                            }
+                        }
+                        for sc in &scenes {
+                            let a = AutoAction::Scene { name: sc.clone() };
+                            if ui.selectable_label(r.action == a, format!("Scene \"{sc}\"")).clicked() {
+                                change = Some((i, a));
+                            }
+                        }
+                    });
+                    if ui
+                        .add(egui::Button::new(RichText::new(icon::TRASH).color(pal().text_dim)).frame(false))
+                        .on_hover_text("Remove rule")
+                        .clicked()
+                    {
+                        remove = Some(i);
+                    }
+                });
+            }
+            let default = if banks > 1 {
+                Some(AutoAction::Bank { bank: 1 })
+            } else {
+                scenes.first().map(|name| AutoAction::Scene { name: name.clone() })
+            };
+            match default {
+                None => {
+                    widgets::hint(ui, "Add a bank or save a scene first (on the Mixer page).");
+                }
+                Some(default) => {
+                    let r = ui.button(format!("{}  Add rule", icon::PLUS));
+                    egui::Popup::menu(&r).show(|ui| {
+                        ui.label(RichText::new("Apps playing now").font(semibold(13.0)));
+                        if apps.is_empty() {
+                            widgets::hint(ui, "None. Start the app, then add the rule.");
+                        }
+                        for (label, pattern) in &apps {
+                            if ui.button(label).clicked() {
+                                let rule = AutoRule {
+                                    app: AppMatch { pattern: pattern.clone(), regex: false },
+                                    label: label.clone(),
+                                    action: default.clone(),
+                                };
+                                self.edit_profile(|p| p.auto.push(rule));
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            };
+            if let Some((i, a)) = change {
+                self.edit_profile(|p| p.auto[i].action = a);
+            }
+            if let Some(i) = remove {
+                self.edit_profile(|p| {
+                    p.auto.remove(i);
+                });
+            }
+        });
     }
 
     pub(super) fn profiles(&mut self, ui: &mut egui::Ui) {
@@ -237,6 +345,8 @@ impl App {
                     }
                 });
             });
+            ui.add_space(12.0);
+            self.auto_card(ui);
         });
 
         let Some((what, arg)) = action else { return };
