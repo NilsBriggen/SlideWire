@@ -468,7 +468,15 @@ impl App {
                         self.send(UiCmd::SetGroupPosition(s.id.clone(), pos));
                     }
                     readout(ui, s, 13.0);
-                    if let Some(v) = s.volume.filter(|_| !s.muted) {
+                    if s.ducked && !s.muted {
+                        ui.add_space(-6.0);
+                        ui.label(
+                            RichText::new(format!("{} ducked", icon::ARROW_DOWN))
+                                .font(mono(10.5))
+                                .color(pal().warn_text),
+                        )
+                        .on_hover_text("Turned down while a strip set to duck others is playing");
+                    } else if let Some(v) = s.volume.filter(|_| !s.muted) {
                         ui.add_space(-6.0);
                         ui.label(RichText::new(db_text(v)).font(mono(10.5)).color(pal().text_faint));
                     }
@@ -696,6 +704,35 @@ impl App {
                 });
             });
         });
+        // Ducking: this strip turns the other apps down while it plays.
+        let duck = {
+            let sh = self.shared.lock().unwrap();
+            sh.active().and_then(|p| p.current().get(&gid)).and_then(|a| a.duck)
+        };
+        let mut on = duck.is_some();
+        if widgets::toggle(ui, &mut on, "Turn other apps down while this plays").changed() {
+            let gid = gid.clone();
+            self.edit_profile(|p| p.current_mut().entry(gid).or_default().duck = on.then(Default::default));
+        }
+        if let Some(mut d) = duck {
+            let before = d;
+            ui.horizontal(|ui| {
+                ui.label("By");
+                ui.add(egui::Slider::new(&mut d.amount_db, -30.0..=-3.0).step_by(1.0).suffix(" dB"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("When louder than");
+                ui.add(
+                    egui::Slider::new(&mut d.threshold, 0.005..=0.3)
+                        .logarithmic(true)
+                        .custom_formatter(|v, _| format!("{:.0} dB", 20.0 * v.log10())),
+                );
+            });
+            if d != before {
+                let gid = gid.clone();
+                self.edit_profile(|p| p.current_mut().entry(gid).or_default().duck = Some(d));
+            }
+        }
         let has_any = !s.targets.is_empty() || s.label.is_some() || s.color.is_some() || s.icon.is_some();
         if ui.add_enabled(has_any, egui::Button::new(format!("{}  Clear strip", icon::ERASER))).clicked() {
             let gid = gid.clone();

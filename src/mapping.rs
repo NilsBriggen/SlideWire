@@ -191,6 +191,44 @@ pub fn db_marks(range: f32, exponent: f32) -> Vec<(f32, i32)> {
         .collect()
 }
 
+/// Gain envelope for ducking: follows "something is playing" with a fast
+/// attack, holds briefly through pauses between words, then releases
+/// slowly. The gain multiplies volumes on PulseAudio's cubic scale.
+#[derive(Debug, Clone)]
+pub struct Ducker {
+    pub gain: f32,
+    /// Seconds since the source was last above its threshold.
+    quiet_for: f32,
+}
+
+impl Default for Ducker {
+    fn default() -> Self {
+        Ducker { gain: 1.0, quiet_for: f32::INFINITY }
+    }
+}
+
+impl Ducker {
+    const ATTACK: f32 = 0.05;
+    const RELEASE: f32 = 0.6;
+    const HOLD: f32 = 0.4;
+
+    /// Advance by `dt` seconds. `amount_db` is the duck depth while a
+    /// source plays (None: nothing is set to duck).
+    pub fn step(&mut self, loud: bool, amount_db: Option<f32>, dt: f32) -> f32 {
+        self.quiet_for = if loud { 0.0 } else { self.quiet_for + dt };
+        let target = match amount_db {
+            Some(db) if self.quiet_for <= Self::HOLD => 10f32.powf(db / 60.0),
+            _ => 1.0,
+        };
+        let tau = if target < self.gain { Self::ATTACK } else { Self::RELEASE };
+        self.gain += (target - self.gain) * (1.0 - (-dt / tau).exp());
+        if (self.gain - target).abs() < 0.002 {
+            self.gain = target;
+        }
+        self.gain
+    }
+}
+
 /// Control as learned from an incoming message.
 pub fn learn(msg: &Msg, kind: ControlKind) -> Control {
     Control {
@@ -216,6 +254,32 @@ pub fn picks_up(last: Option<f32>, pos: f32, current: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ducking_envelope() {
+        let mut d = super::Ducker::default();
+        let target = 10f32.powf(-12.0 / 60.0);
+        // Fast attack: most of the way down within 0.1 s.
+        for _ in 0..2 {
+            d.step(true, Some(-12.0), 0.05);
+        }
+        assert!(d.gain < 1.0 - 0.8 * (1.0 - target), "{}", d.gain);
+        for _ in 0..10 {
+            d.step(true, Some(-12.0), 0.05);
+        }
+        assert_eq!(d.gain, target);
+        // Short pauses (between words) keep it down.
+        d.step(false, Some(-12.0), 0.3);
+        assert_eq!(d.gain, target);
+        // Then it comes back slowly.
+        d.step(false, Some(-12.0), 0.2);
+        let after = d.step(false, Some(-12.0), 0.1);
+        assert!(after > target && after < 0.95, "{after}");
+        for _ in 0..80 {
+            d.step(false, Some(-12.0), 0.05);
+        }
+        assert_eq!(d.gain, 1.0);
+    }
+
     #[test]
     fn db_marks() {
         let m = super::db_marks(1.0, 1.0);

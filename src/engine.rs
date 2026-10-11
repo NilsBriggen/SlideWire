@@ -108,6 +108,8 @@ pub struct StripView {
     pub pickup: Option<f32>,
     /// Volume at the top of the fader (max volume times boost).
     pub range: f32,
+    /// Turned down right now because another strip is playing.
+    pub ducked: bool,
     /// Icon names to try, per resolved target.
     pub icons: Vec<Vec<String>>,
     /// User-set name, colour (index) and icon for the strip.
@@ -243,6 +245,11 @@ pub struct Engine {
     rescan_follow_up: Option<Instant>,
     /// Volumes and mutes from before the last scene recall.
     scene_undo: Option<crate::profile::Scene>,
+    /// Ducking: the gain envelope, when it was last advanced, and the
+    /// volume each turned-down app stream should go back to.
+    ducker: mapping::Ducker,
+    duck_tick: Instant,
+    duck_base: HashMap<u32, f32>,
     show_window: Sender<()>,
 }
 
@@ -276,6 +283,9 @@ impl Engine {
             rescan_at: None,
             rescan_follow_up: None,
             scene_undo: None,
+            ducker: mapping::Ducker::default(),
+            duck_tick: Instant::now(),
+            duck_base: HashMap::new(),
             show_window,
         }
     }
@@ -942,13 +952,27 @@ impl Engine {
         (s.curve, if s.allow_boost { 1.5 } else { 1.0 })
     }
 
+    /// Does ducking turn this group's streams of this kind down? Apps on
+    /// strips that don't duck others themselves.
+    fn duckable(profile: &Profile, gid: &str, kind: Kind) -> bool {
+        kind == Kind::SinkInput && profile.current().get(gid).is_none_or(|a| a.duck.is_none())
+    }
+
+    /// A stream's volume as the user set it: without ducking.
+    fn undocked_volume(&self, r: &Resolved) -> f32 {
+        match r.kind {
+            Kind::SinkInput => self.duck_base.get(&r.index).copied().unwrap_or(r.volume),
+            _ => r.volume,
+        }
+    }
+
     /// Current slider position of a group.
     fn group_position(&mut self, profile: &Profile, gid: &str) -> f32 {
         let (targets, max) = self.group_settings(profile, gid);
         let res = self.resolve(profile, &targets);
         let (curve, boost) = self.vol_range();
         match res.first() {
-            Some(r) => mapping::inverse_curve(r.volume / (max * boost), curve),
+            Some(r) => mapping::inverse_curve(self.undocked_volume(r) / (max * boost), curve),
             None => self.positions.get(gid).copied().unwrap_or(0.0),
         }
     }
@@ -959,9 +983,16 @@ impl Engine {
         let (curve, boost) = self.vol_range();
         let vol = mapping::curve(pos, curve) * max * boost;
         let res = self.resolve(profile, &targets);
+        let gain = self.ducker.gain;
         for r in &res {
-            self.audio.send(AudioCmd::SetVolume(r.kind, r.index, vol));
-            self.optimistic(r.kind, r.index, Some(vol), None);
+            let mut v = vol;
+            if gain < 1.0 && Self::duckable(profile, gid, r.kind) {
+                // Ducked right now: remember the new level, play it turned down.
+                self.duck_base.insert(r.index, vol);
+                v = vol * gain;
+            }
+            self.audio.send(AudioCmd::SetVolume(r.kind, r.index, v));
+            self.optimistic(r.kind, r.index, Some(v), None);
         }
         if osd {
             let sh = self.shared.lock().unwrap();
@@ -1267,8 +1298,10 @@ impl Engine {
             let (targets, max) = self.group_settings(&profile, gid);
             let settings = profile.current().get(gid);
             let res = self.resolve(&profile, &targets);
+            let ducked =
+                res.first().is_some_and(|r| r.kind == Kind::SinkInput && self.duck_base.contains_key(&r.index));
             let position = match res.first() {
-                Some(r) => mapping::inverse_curve(r.volume / (max * boost), curve),
+                Some(r) => mapping::inverse_curve(self.undocked_volume(r) / (max * boost), curve),
                 None => self.positions.get(gid).copied().unwrap_or(0.0),
             };
             let muted = !res.is_empty() && res.iter().all(|r| r.mute);
@@ -1304,7 +1337,8 @@ impl Engine {
                     msgs.push(mapping::level_message(c, position));
                 }
             }
-            if !g.meters.is_empty() {
+            // Duck sources are metered even with the window closed.
+            if !g.meters.is_empty() || settings.is_some_and(|a| a.duck.is_some()) {
                 meters.extend(res.iter().filter_map(|r| r.meter.clone()));
             } else if ui_visible {
                 meters.extend(res.iter().filter_map(|r| r.meter.clone()).filter(|k| !matches!(k, MeterKey::Source(_))));
@@ -1332,6 +1366,7 @@ impl Engine {
                 icon_hint: res.first().map(|r| r.hints.clone()).unwrap_or_default(),
                 pickup: self.waiting.get(gid).copied().filter(|p| (p - position).abs() > 0.03),
                 range: max * boost,
+                ducked,
                 icons: res.iter().map(|r| r.hints.clone()).collect(),
                 label: settings.and_then(|a| a.label.clone()),
                 color: settings.and_then(|a| a.color),
@@ -1372,17 +1407,65 @@ impl Engine {
     }
 
     /// Update peak meters (MIDI output and GUI).
+    /// Advance the ducking envelope and set the ducked streams' volumes.
+    fn step_ducking(&mut self, profile: &Profile, loud: bool, amount: Option<f32>) {
+        let now = Instant::now();
+        let dt = now.duration_since(self.duck_tick).as_secs_f32().min(0.2);
+        self.duck_tick = now;
+        let before = self.ducker.gain;
+        let gain = self.ducker.step(loud, amount, dt);
+        if gain >= 1.0 {
+            // Back to normal: restore what each stream was set to.
+            for (index, base) in std::mem::take(&mut self.duck_base) {
+                self.audio.send(AudioCmd::SetVolume(Kind::SinkInput, index, base));
+                self.optimistic(Kind::SinkInput, index, Some(base), None);
+            }
+            return;
+        }
+        let mut streams: Vec<(u32, f32)> = Vec::new();
+        for gid in profile.groups.keys() {
+            let (targets, _) = self.group_settings(profile, gid);
+            for r in self.resolve(profile, &targets) {
+                if Self::duckable(profile, gid, r.kind) && !streams.iter().any(|s| s.0 == r.index) {
+                    streams.push((r.index, r.volume));
+                }
+            }
+        }
+        // Turn down newly started apps, and all of them while the gain moves.
+        for (index, current) in streams {
+            let new = !self.duck_base.contains_key(&index);
+            let base = *self.duck_base.entry(index).or_insert(current);
+            if new || gain != before {
+                let v = base * gain;
+                self.audio.send(AudioCmd::SetVolume(Kind::SinkInput, index, v));
+                self.optimistic(Kind::SinkInput, index, Some(v), None);
+            }
+        }
+    }
+
     fn meters(&mut self) {
         if self.meters_wanted.is_empty() {
+            // Nothing to measure; still let a running duck come back up.
+            let profile = self.shared.lock().unwrap().active().cloned();
+            if let Some(profile) = profile.filter(|_| !self.duck_base.is_empty()) {
+                self.step_ducking(&profile, false, None);
+            }
             return;
         }
         let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
         let mut msgs = Vec::new();
         let mut any = false;
+        // Ducking: is any duck source playing, and how deep (the deepest wins)?
+        let mut duck_amount: Option<f32> = None;
+        let mut loud = false;
         for (gid, g) in &profile.groups {
             let (targets, _) = self.group_settings(&profile, gid);
             let res = self.resolve(&profile, &targets);
             let peak = res.iter().filter_map(|r| r.meter.as_ref()).map(|k| self.audio.peak(k)).fold(0.0f32, f32::max);
+            if let Some(d) = profile.current().get(gid).and_then(|a| a.duck) {
+                duck_amount = Some(duck_amount.map_or(d.amount_db, |a: f32| a.min(d.amount_db)));
+                loud |= peak > d.threshold;
+            }
             let prev = self.peaks.get(gid).copied().unwrap_or(0.0);
             // Fast attack, slow release.
             let v = if peak >= prev { peak } else { (prev - 0.04).max(peak) };
@@ -1403,6 +1486,7 @@ impl Engine {
                 let _ = out.send(&m);
             }
         }
+        self.step_ducking(&profile, loud, duck_amount);
         let source_peaks: HashMap<MeterKey, f32> =
             self.meters_wanted.iter().map(|k| (k.clone(), self.audio.peak(k))).collect();
         any |= source_peaks != self.shared.lock().unwrap().source_peaks;

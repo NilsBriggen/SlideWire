@@ -435,6 +435,24 @@ pub struct GroupSettings {
     /// Icon name shown on the strip instead of the target's own icon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// While this strip plays, turn the apps on other strips down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duck: Option<Duck>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Duck {
+    /// How far the other apps go down, in dB (negative).
+    pub amount_db: f32,
+    /// Peak level (0..=1) above which this strip counts as playing.
+    pub threshold: f32,
+}
+
+impl Default for Duck {
+    fn default() -> Self {
+        Duck { amount_db: -12.0, threshold: 0.04 }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -446,7 +464,7 @@ pub enum Widget {
 
 impl Default for GroupSettings {
     fn default() -> Self {
-        Self { targets: Vec::new(), max_volume: 1.0, widget: None, label: None, color: None, icon: None }
+        Self { targets: Vec::new(), max_volume: 1.0, widget: None, label: None, color: None, icon: None, duck: None }
     }
 }
 
@@ -670,6 +688,21 @@ fn is_one(v: &f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_settings_compat() {
+        // Written before names, colours, icons and ducking existed.
+        let old: GroupSettings =
+            serde_json::from_str(r#"{"targets":[{"type":"defaultOutput"}],"maxVolume":0.8}"#).unwrap();
+        assert_eq!((old.label, old.color, old.icon, old.duck), (None, None, None, None));
+        // Unset fields stay out of the file.
+        let json = serde_json::to_string(&GroupSettings::default()).unwrap();
+        assert_eq!(json, r#"{"targets":[]}"#);
+        let g = GroupSettings { label: Some("Music".into()), duck: Some(Duck::default()), ..Default::default() };
+        let back: GroupSettings = serde_json::from_str(&serde_json::to_string(&g).unwrap()).unwrap();
+        assert_eq!(back.label.as_deref(), Some("Music"));
+        assert_eq!(back.duck, Some(Duck::default()));
+    }
 
     /// Profiles shipped with MIDI Mixer for Windows. They aren't part of this
     /// repository; point `SLIDEWIRE_WINDOWS_PROFILES` at an extracted copy.
