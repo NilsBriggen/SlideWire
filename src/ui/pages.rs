@@ -63,8 +63,9 @@ impl App {
                                     egui::StrokeKind::Inside,
                                 );
                             }
+                            let scenes: Vec<String> = p.scenes.keys().cloned().collect();
                             let action = p.buttons.entry(cid.clone()).or_default();
-                            action_editor(ui, cid, action, &audio, &profiles);
+                            action_editor(ui, cid, action, &audio, &profiles, &scenes);
                             ui.add_space(4.0);
                             if widgets::icon_button(ui, icon::PLAY, "Try it").clicked() {
                                 press = Some(cid.clone());
@@ -357,6 +358,7 @@ fn action_editor(
     action: &mut ButtonAction,
     audio: &AudioState,
     profiles: &[(String, String)],
+    scenes: &[String],
 ) {
     let kinds = [
         ButtonAction::None,
@@ -367,6 +369,11 @@ fn action_editor(
         ButtonAction::Command { command: String::new() },
         ButtonAction::Keys { keys: String::new() },
         ButtonAction::Profile { id: String::new() },
+        ButtonAction::Bank { step: 1 },
+        ButtonAction::Scene { name: scenes.first().cloned().unwrap_or_default() },
+        ButtonAction::MuteInputs,
+        ButtonAction::PushToTalk,
+        ButtonAction::PushToMute,
     ];
     egui::ComboBox::from_id_salt(("action", cid)).selected_text(action.label()).width(240.0).show_ui(ui, |ui| {
         for k in kinds {
@@ -437,6 +444,34 @@ fn action_editor(
         ButtonAction::Keys { keys } => {
             ui.add(egui::TextEdit::singleline(keys).desired_width(220.0).hint_text("ctrl+shift+m"));
             widgets::hint(ui, "Needs ydotool with ydotoold running.");
+        }
+        ButtonAction::Bank { step } => {
+            ui.horizontal(|ui| {
+                ui.selectable_value(step, -1, format!("{}  Previous", icon::CARET_LEFT));
+                ui.selectable_value(step, 1, format!("{}  Next", icon::CARET_RIGHT));
+            });
+            widgets::hint(ui, "Wraps around. The button's LED is lit on banks 2 and up.");
+        }
+        ButtonAction::Scene { name } => {
+            if scenes.is_empty() {
+                widgets::hint(ui, "No scenes yet. Save one with the Scenes menu on the Mixer page.");
+            } else {
+                let text = if name.is_empty() { "Pick…".to_string() } else { name.clone() };
+                egui::ComboBox::from_id_salt(("scene-action", cid)).selected_text(text).show_ui(ui, |ui| {
+                    for s in scenes {
+                        ui.selectable_value(name, s.clone(), s);
+                    }
+                });
+            }
+        }
+        ButtonAction::MuteInputs => {
+            widgets::hint(ui, "Mutes or unmutes every microphone. The LED is lit while they're muted.");
+        }
+        ButtonAction::PushToTalk => {
+            widgets::hint(ui, "The default microphone is live only while you hold the button.");
+        }
+        ButtonAction::PushToMute => {
+            widgets::hint(ui, "The default microphone is muted while you hold the button.");
         }
         ButtonAction::Profile { id } => {
             let current =

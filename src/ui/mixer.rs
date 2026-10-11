@@ -65,14 +65,24 @@ impl App {
             let sh = self.shared.lock().unwrap();
             (sh.strips.clone(), sh.audio.clone())
         };
+        let (bank, bank_count, scenes) = {
+            let sh = self.shared.lock().unwrap();
+            sh.active().map(|p| (p.bank, p.bank_count(), p.scenes.keys().cloned().collect::<Vec<_>>())).unwrap_or((
+                0,
+                1,
+                Vec::new(),
+            ))
+        };
         ui.horizontal(|ui| {
             ui.label(RichText::new("Console").font(semibold(17.0)));
-            widgets::hint(ui, "Drag apps and devices from the right onto a strip, or use the S button.");
+            ui.add_space(6.0);
+            self.bank_tabs(ui, bank, bank_count);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let label = if self.show_sources { "Hide sources" } else { "Show sources" };
                 if widgets::icon_button(ui, icon::SQUARES_FOUR, label).clicked() {
                     self.show_sources = !self.show_sources;
                 }
+                self.scenes_menu(ui, &scenes);
             });
         });
         ui.add_space(6.0);
@@ -119,6 +129,86 @@ impl App {
                 });
                 ui.add_space(14.0);
             }
+        });
+    }
+
+    /// "Bank 1 | Bank 2 | +": each bank has its own assignments.
+    fn bank_tabs(&mut self, ui: &mut egui::Ui, bank: usize, count: usize) {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for i in 0..count {
+            let r = ui
+                .selectable_label(i == bank, format!("Bank {}", i + 1))
+                .on_hover_text("Each bank has its own assignments. Right-click to clear or remove.");
+            if r.clicked() && i != bank {
+                self.send(UiCmd::SetBank(i));
+            }
+            r.context_menu(|ui| {
+                let label = if i == 0 { "Clear bank 1" } else { "Remove this bank" };
+                if ui.button(format!("{}  {label}", icon::TRASH)).clicked() {
+                    self.edit_profile(|p| p.remove_bank(i));
+                    ui.close();
+                }
+            });
+        }
+        if ui.small_button(icon::PLUS).on_hover_text("Add a bank").clicked() {
+            self.edit_profile(|p| {
+                p.banks.push(Default::default());
+                p.bank = p.bank_count() - 1;
+            });
+        }
+        if count == 1 {
+            widgets::hint(ui, "Drag apps and devices from the right onto a strip, or use the S button.");
+        }
+    }
+
+    /// Recall, save and delete scenes (volume and mute snapshots).
+    fn scenes_menu(&mut self, ui: &mut egui::Ui, scenes: &[String]) {
+        ui.menu_button(format!("{}  Scenes", icon::BOOKMARKS_SIMPLE), |ui| {
+            ui.set_min_width(240.0);
+            if scenes.is_empty() {
+                widgets::hint(ui, "Save the current volumes and mutes to recall them later.");
+            }
+            let mut delete = None;
+            for name in scenes {
+                ui.horizontal(|ui| {
+                    if ui.button(format!("{}  {name}", icon::PLAY)).on_hover_text("Recall").clicked() {
+                        self.send(UiCmd::RecallScene(name.clone()));
+                        ui.close();
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button(icon::TRASH).on_hover_text("Delete").clicked() {
+                            delete = Some(name.clone());
+                        }
+                        if ui
+                            .small_button(icon::FLOPPY_DISK)
+                            .on_hover_text("Overwrite with the current volumes")
+                            .clicked()
+                        {
+                            self.send(UiCmd::SaveScene(name.clone()));
+                            self.flash(format!("Saved scene \"{name}\""));
+                        }
+                    });
+                });
+            }
+            if let Some(name) = delete {
+                self.edit_profile(|p| {
+                    p.scenes.shift_remove(&name);
+                });
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.scene_name).hint_text("New scene name").desired_width(150.0),
+                );
+                let name = self.scene_name.trim().to_string();
+                if ui.add_enabled(!name.is_empty(), egui::Button::new("Save")).clicked() {
+                    self.send(UiCmd::SaveScene(name.clone()));
+                    self.flash(format!("Saved scene \"{name}\""));
+                    self.scene_name.clear();
+                    ui.close();
+                }
+            });
+            widgets::hint(ui, "Buttons can recall scenes too (Buttons page).");
         });
     }
 
@@ -313,7 +403,7 @@ impl App {
         if let Some(i) = remove {
             let gid = s.id.clone();
             self.edit_profile(|p| {
-                if let Some(a) = p.assignments.get_mut(&gid) {
+                if let Some(a) = p.current_mut().get_mut(&gid) {
                     a.targets.remove(i);
                 }
             });
@@ -336,7 +426,7 @@ impl App {
     pub(super) fn add_target(&self, gid: &str, t: Target) {
         let gid = gid.to_string();
         self.edit_profile(|p| {
-            let a = p.assignments.entry(gid).or_default();
+            let a = p.current_mut().entry(gid).or_default();
             if !a.targets.contains(&t) {
                 a.targets.push(t);
             }
@@ -421,7 +511,7 @@ impl App {
         });
         let current_max = {
             let sh = self.shared.lock().unwrap();
-            sh.active().and_then(|p| p.assignments.get(gid)).map(|a| a.max_volume).unwrap_or(1.0)
+            sh.active().and_then(|p| p.current().get(gid)).map(|a| a.max_volume).unwrap_or(1.0)
         };
         let mut max = current_max;
         ui.horizontal(|ui| {
@@ -430,7 +520,7 @@ impl App {
         });
         if (max - current_max).abs() > f32::EPSILON {
             let gid = gid.to_string();
-            self.edit_profile(|p| p.assignments.entry(gid).or_default().max_volume = max);
+            self.edit_profile(|p| p.current_mut().entry(gid).or_default().max_volume = max);
         }
     }
 

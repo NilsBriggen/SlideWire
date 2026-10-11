@@ -212,13 +212,23 @@ impl Osd {
                         req = newer;
                     }
                     let (icon, percent, text) = req;
-                    let _ = conn.call_method(
-                        Some("org.kde.plasmashell"),
-                        "/org/kde/osdService",
-                        Some("org.kde.osdService"),
-                        "showProgress",
-                        &(icon, percent, 100i32, text),
-                    );
+                    let _ = if percent < 0 {
+                        conn.call_method(
+                            Some("org.kde.plasmashell"),
+                            "/org/kde/osdService",
+                            Some("org.kde.osdService"),
+                            "showText",
+                            &(icon, text),
+                        )
+                    } else {
+                        conn.call_method(
+                            Some("org.kde.plasmashell"),
+                            "/org/kde/osdService",
+                            Some("org.kde.osdService"),
+                            "showProgress",
+                            &(icon, percent, 100i32, text),
+                        )
+                    };
                     std::thread::sleep(Duration::from_millis(30));
                 }
             })
@@ -228,5 +238,10 @@ impl Osd {
 
     pub fn show(&self, icon: &str, percent: i32, text: &str) {
         let _ = self.tx.send((icon.to_string(), percent, text.to_string()));
+    }
+
+    /// A text-only pop-up (bank and scene changes).
+    pub fn show_text(&self, icon: &str, text: &str) {
+        let _ = self.tx.send((icon.to_string(), -1, text.to_string()));
     }
 }

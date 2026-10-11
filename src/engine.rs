@@ -42,6 +42,10 @@ pub enum UiCmd {
     /// Run the action of a group role / spare button as if pressed.
     Press(String),
     MuteAll,
+    SetBank(usize),
+    /// Save the current strips under a name.
+    SaveScene(String),
+    RecallScene(String),
 }
 
 pub enum Event {
@@ -477,7 +481,7 @@ impl Engine {
                     }
                 }
                 Input::Press => self.press(&profile, cid),
-                Input::Release => {}
+                Input::Release => self.release(&profile, cid),
             }
         }
         self.shared.lock().unwrap().repaint();
@@ -541,6 +545,124 @@ impl Engine {
             ButtonAction::DefaultOutput { names } => self.cycle_default(Kind::Sink, names),
             ButtonAction::DefaultInput { names } => self.cycle_default(Kind::Source, names),
             ButtonAction::Profile { id } => self.activate_profile(id),
+            ButtonAction::Bank { step } => self.set_bank(None, *step),
+            ButtonAction::Scene { name } => self.recall_scene(name),
+            ButtonAction::MuteInputs => {
+                let sh = self.shared.lock().unwrap();
+                let default_muted =
+                    sh.audio.sources.iter().find(|d| d.name == sh.audio.default_source).is_some_and(|d| d.mute);
+                let cmds: Vec<AudioCmd> =
+                    sh.audio.sources.iter().map(|d| AudioCmd::SetMute(Kind::Source, d.index, !default_muted)).collect();
+                let osd = sh.store.settings.osd;
+                drop(sh);
+                for c in cmds {
+                    self.audio.send(c);
+                }
+                if osd {
+                    let (icon, text) = if default_muted {
+                        ("audio-input-microphone", "Microphones on")
+                    } else {
+                        ("microphone-sensitivity-muted", "Microphones muted")
+                    };
+                    self.osd.show_text(icon, text);
+                }
+            }
+            ButtonAction::PushToTalk => self.mute_default_input(false),
+            ButtonAction::PushToMute => self.mute_default_input(true),
+        }
+    }
+
+    /// A button was let go: undo push-to-talk / push-to-mute.
+    fn release(&mut self, profile: &Profile, cid: &str) {
+        match profile.buttons.get(cid) {
+            Some(ButtonAction::PushToTalk) => self.mute_default_input(true),
+            Some(ButtonAction::PushToMute) => self.mute_default_input(false),
+            _ => {}
+        }
+    }
+
+    fn mute_default_input(&mut self, mute: bool) {
+        let sh = self.shared.lock().unwrap();
+        let Some(d) = sh.audio.sources.iter().find(|d| d.name == sh.audio.default_source) else { return };
+        let index = d.index;
+        drop(sh);
+        self.audio.send(AudioCmd::SetMute(Kind::Source, index, mute));
+        self.optimistic(Kind::Source, index, None, Some(mute));
+    }
+
+    /// Switch to bank `bank`, or move `step` banks. Faders stay where they are
+    /// physically; soft takeover keeps the new bank's volumes from jumping.
+    fn set_bank(&mut self, bank: Option<usize>, step: i32) {
+        let mut sh = self.shared.lock().unwrap();
+        let Some(id) = sh.active_id() else { return };
+        let p = sh.store.profiles.get_mut(&id).unwrap();
+        if p.bank_count() < 2 {
+            sh.log("Only one bank. Add banks above the console on the Mixer page.");
+            return;
+        }
+        let new = match bank {
+            Some(b) => {
+                p.bank = b.min(p.bank_count() - 1);
+                p.bank
+            }
+            None => p.step_bank(step),
+        };
+        let _ = sh.store.save_profile(&id);
+        let osd = sh.store.settings.osd;
+        sh.log(format!("Bank {}", new + 1));
+        drop(sh);
+        self.positions.clear();
+        self.waiting.clear();
+        if osd {
+            self.osd.show_text("view-grid", &format!("Bank {}", new + 1));
+        }
+        self.sent.clear();
+        self.feedback();
+    }
+
+    fn save_scene(&mut self, name: &str) {
+        let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
+        let mut scene = crate::profile::Scene { bank: profile.bank, ..Default::default() };
+        for gid in profile.groups.keys() {
+            let (targets, _) = self.group_settings(&profile, gid);
+            let res = self.resolve(&profile, &targets);
+            if res.is_empty() {
+                continue;
+            }
+            let position = self.group_position(&profile, gid);
+            let mute = res.iter().all(|r| r.mute);
+            scene.strips.insert(gid.clone(), crate::profile::SceneStrip { position, mute });
+        }
+        let mut sh = self.shared.lock().unwrap();
+        let Some(id) = sh.active_id() else { return };
+        sh.store.profiles.get_mut(&id).unwrap().scenes.insert(name.to_string(), scene);
+        let _ = sh.store.save_profile(&id);
+        sh.log(format!("Saved scene \"{name}\""));
+    }
+
+    fn recall_scene(&mut self, name: &str) {
+        let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
+        let Some(scene) = profile.scenes.get(name).cloned() else {
+            self.shared.lock().unwrap().log(format!("No scene called \"{name}\""));
+            return;
+        };
+        if scene.bank != profile.bank && scene.bank < profile.bank_count() {
+            self.set_bank(Some(scene.bank), 0);
+        }
+        let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
+        for (gid, st) in &scene.strips {
+            if !profile.groups.contains_key(gid) {
+                continue;
+            }
+            self.set_group_position(&profile, gid, st.position, false);
+            let (targets, _) = self.group_settings(&profile, gid);
+            for r in self.resolve(&profile, &targets) {
+                self.audio.send(AudioCmd::SetMute(r.kind, r.index, st.mute));
+                self.optimistic(r.kind, r.index, None, Some(st.mute));
+            }
+        }
+        if self.shared.lock().unwrap().store.settings.osd {
+            self.osd.show_text("view-media-playlist", &format!("Scene: {name}"));
         }
     }
 
@@ -647,6 +769,9 @@ impl Engine {
                     self.press(p, &cid);
                 }
             }
+            UiCmd::SetBank(b) => self.set_bank(Some(b), 0),
+            UiCmd::SaveScene(name) => self.save_scene(&name),
+            UiCmd::RecallScene(name) => self.recall_scene(&name),
             UiCmd::MuteAll => {
                 let sh = self.shared.lock().unwrap();
                 let cmds: Vec<AudioCmd> =
@@ -662,7 +787,7 @@ impl Engine {
     // ------------------------------------------------------- group behaviour
 
     fn group_settings(&self, profile: &Profile, gid: &str) -> (Vec<Target>, f32) {
-        profile.assignments.get(gid).map(|a| (a.targets.clone(), a.max_volume)).unwrap_or((Vec::new(), 1.0))
+        profile.current().get(gid).map(|a| (a.targets.clone(), a.max_volume)).unwrap_or((Vec::new(), 1.0))
     }
 
     fn vol_range(&self) -> (f32, f32) {
@@ -735,7 +860,7 @@ impl Engine {
     fn assign(&mut self, gid: &str) {
         let mut sh = self.shared.lock().unwrap();
         let Some(id) = sh.active_id() else { return };
-        let assigned = sh.store.profiles[&id].assignments.get(gid).is_some_and(|a| !a.targets.is_empty());
+        let assigned = sh.store.profiles[&id].current().get(gid).is_some_and(|a| !a.targets.is_empty());
         let target = if assigned {
             None
         } else {
@@ -756,7 +881,7 @@ impl Engine {
             Some(Target::App { m: AppMatch { pattern, regex: false }, label })
         };
         let p = sh.store.profiles.get_mut(&id).unwrap();
-        let entry = p.assignments.entry(gid.to_string()).or_default();
+        let entry = p.current_mut().entry(gid.to_string()).or_default();
         match target {
             Some(t) => entry.targets = vec![t],
             None => entry.targets.clear(),
@@ -910,7 +1035,7 @@ impl Engine {
                 }
                 Target::Unassigned => {
                     let claimed: Vec<AppMatch> = profile
-                        .assignments
+                        .current()
                         .values()
                         .flat_map(|a| a.targets.iter())
                         .filter_map(|t| if let Target::App { m, .. } = t { Some(m.clone()) } else { None })
@@ -1059,6 +1184,20 @@ impl Engine {
                 icon_hint: res.first().map(|r| r.hints.clone()).unwrap_or_default(),
                 pickup: self.waiting.get(gid).copied().filter(|p| (p - position).abs() > 0.03),
             });
+        }
+        // LEDs of buttons whose action has a state.
+        let mic_muted = audio.sources.iter().find(|d| d.name == audio.default_source).is_some_and(|d| d.mute);
+        for (cid, action) in &profile.buttons {
+            let on = match action {
+                ButtonAction::Bank { .. } => profile.bank > 0,
+                ButtonAction::MuteInputs | ButtonAction::PushToMute => mic_muted,
+                ButtonAction::PushToTalk => !mic_muted,
+                _ => continue,
+            };
+            if let Some(c) = profile.controls.get(cid) {
+                msgs.push(mapping::indicator_message(c, on));
+                leds.insert(cid.clone(), if on { 1.0 } else { 0.0 });
+            }
         }
         if ui_visible {
             // The sources panel shows playback meters. Inputs are not metered

@@ -51,6 +51,7 @@ pub struct App {
     status: Option<(String, Instant)>,
     expanded_control: Option<String>,
     control_search: String,
+    scene_name: String,
     /// Peak-hold per strip: (value, time it was set).
     meter_hold: HashMap<String, (f32, f64)>,
     show_sources: bool,
@@ -96,6 +97,7 @@ impl App {
             status: None,
             expanded_control: None,
             control_search: String::new(),
+            scene_name: String::new(),
             meter_hold: HashMap::new(),
             show_sources: true,
             show_doctor: crate::config::env("TAB").as_deref() == Some("doctor"),

@@ -208,6 +208,9 @@ impl App {
                 if let Some(gid) = remove_group {
                     p.groups.shift_remove(&gid);
                     p.assignments.shift_remove(&gid);
+                    for b in &mut p.banks {
+                        b.shift_remove(&gid);
+                    }
                 }
             });
         });

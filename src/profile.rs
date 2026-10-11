@@ -379,6 +379,20 @@ pub enum ButtonAction {
     Profile {
         id: String,
     },
+    /// Go `step` banks forward or back (wrapping). The LED is lit on banks 2+.
+    Bank {
+        step: i32,
+    },
+    /// Recall a saved scene.
+    Scene {
+        name: String,
+    },
+    /// Mute or unmute every input device. The LED shows the default input's mute.
+    MuteInputs,
+    /// The default input is unmuted only while the button is held.
+    PushToTalk,
+    /// The default input is muted only while the button is held.
+    PushToMute,
 }
 
 impl ButtonAction {
@@ -392,6 +406,11 @@ impl ButtonAction {
             ButtonAction::DefaultOutput { .. } => "Set/cycle default output",
             ButtonAction::DefaultInput { .. } => "Set/cycle default input",
             ButtonAction::Profile { .. } => "Switch profile",
+            ButtonAction::Bank { .. } => "Previous/next bank",
+            ButtonAction::Scene { .. } => "Recall scene",
+            ButtonAction::MuteInputs => "Mute all inputs",
+            ButtonAction::PushToTalk => "Push to talk",
+            ButtonAction::PushToMute => "Push to mute",
         }
     }
 }
@@ -438,9 +457,18 @@ pub struct Profile {
     pub controls: IndexMap<String, Control>,
     #[serde(default)]
     pub groups: IndexMap<String, Group>,
-    /// Group id -> what it controls.
+    /// Group id -> what it controls (bank 1).
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub assignments: IndexMap<String, GroupSettings>,
+    /// Assignments of banks 2, 3, ...
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub banks: Vec<IndexMap<String, GroupSettings>>,
+    /// The active bank (0 = `assignments`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub bank: usize,
+    /// Saved volume/mute snapshots by name.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub scenes: IndexMap<String, Scene>,
     /// Button control id -> action (for buttons outside groups).
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub buttons: IndexMap<String, ButtonAction>,
@@ -448,7 +476,65 @@ pub struct Profile {
     pub extra: IndexMap<String, Value>,
 }
 
+/// Volume position (0..=1) and mute of every strip, per bank.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Scene {
+    pub bank: usize,
+    pub strips: IndexMap<String, SceneStrip>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SceneStrip {
+    pub position: f32,
+    pub mute: bool,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 impl Profile {
+    pub fn bank_count(&self) -> usize {
+        1 + self.banks.len()
+    }
+
+    /// Assignments of the active bank.
+    pub fn current(&self) -> &IndexMap<String, GroupSettings> {
+        match self.bank {
+            0 => &self.assignments,
+            n => self.banks.get(n - 1).unwrap_or(&self.assignments),
+        }
+    }
+
+    pub fn current_mut(&mut self) -> &mut IndexMap<String, GroupSettings> {
+        if self.bank > self.banks.len() {
+            self.bank = 0;
+        }
+        match self.bank {
+            0 => &mut self.assignments,
+            n => &mut self.banks[n - 1],
+        }
+    }
+
+    /// Move `step` banks forward or back, wrapping around. Returns the new bank.
+    pub fn step_bank(&mut self, step: i32) -> usize {
+        let n = self.bank_count() as i32;
+        self.bank = (self.bank as i32 + step).rem_euclid(n) as usize;
+        self.bank
+    }
+
+    /// Remove bank `i` (bank 1 can't be removed, only cleared).
+    pub fn remove_bank(&mut self, i: usize) {
+        if i == 0 {
+            self.assignments.values_mut().for_each(|a| a.targets.clear());
+        } else if i <= self.banks.len() {
+            self.banks.remove(i - 1);
+        }
+        if self.bank >= self.bank_count() {
+            self.bank = self.bank_count() - 1;
+        }
+    }
+
     pub fn load(path: &Path) -> Result<Profile> {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let p: Profile = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
@@ -459,6 +545,9 @@ impl Profile {
     pub fn to_spec_json(&self) -> Result<String> {
         let mut p = self.clone();
         p.assignments.clear();
+        p.banks.clear();
+        p.bank = 0;
+        p.scenes.clear();
         p.buttons.clear();
         p.preset = false;
         Ok(serde_json::to_string_pretty(&p)?)
@@ -533,22 +622,22 @@ impl Profile {
             p.groups.insert(new_id(), Group { name: format!("Knob {n}"), faders: vec![knob], ..Default::default() });
         }
         let transport = [
-            ("Track <", 58, None),
-            ("Track >", 59, None),
-            ("Cycle", 46, None),
+            ("Track <", 58, Some(ButtonAction::Bank { step: -1 })),
+            ("Track >", 59, Some(ButtonAction::Bank { step: 1 })),
+            ("Cycle", 46, Some(ButtonAction::Bank { step: 1 })),
             ("Marker set", 60, None),
             ("Marker <", 61, None),
             ("Marker >", 62, None),
-            ("Rewind", 43, Some(MediaKey::Previous)),
-            ("Fast forward", 44, Some(MediaKey::Next)),
-            ("Stop", 42, Some(MediaKey::Stop)),
-            ("Play", 41, Some(MediaKey::PlayPause)),
-            ("Record", 45, None),
+            ("Rewind", 43, Some(ButtonAction::Media { key: MediaKey::Previous })),
+            ("Fast forward", 44, Some(ButtonAction::Media { key: MediaKey::Next })),
+            ("Stop", 42, Some(ButtonAction::Media { key: MediaKey::Stop })),
+            ("Play", 41, Some(ButtonAction::Media { key: MediaKey::PlayPause })),
+            ("Record", 45, Some(ButtonAction::MuteInputs)),
         ];
-        for (name, cc, key) in transport {
+        for (name, cc, action) in transport {
             let id = add(&mut p, name.into(), ControlKind::Button, cc, false);
-            if let Some(key) = key {
-                p.buttons.insert(id, ButtonAction::Media { key });
+            if let Some(action) = action {
+                p.buttons.insert(id, action);
             }
         }
         p
@@ -627,7 +716,7 @@ mod tests {
         let p = Profile::nanokontrol2();
         assert_eq!(p.groups.len(), 16);
         assert_eq!(p.spare_buttons().len(), 11);
-        assert_eq!(p.buttons.len(), 4);
+        assert_eq!(p.buttons.len(), 8);
     }
 
     #[test]
@@ -635,5 +724,34 @@ mod tests {
         let t = Target::App { m: AppMatch { pattern: "firefox".into(), regex: false }, label: "Firefox".into() };
         let s = serde_json::to_string(&t).unwrap();
         assert_eq!(serde_json::from_str::<Target>(&s).unwrap(), t);
+    }
+
+    #[test]
+    fn banks() {
+        let mut p = Profile::nanokontrol2();
+        let gid = p.groups.keys().next().unwrap().clone();
+        p.current_mut().entry(gid.clone()).or_default().targets.push(Target::DefaultOutput);
+        assert_eq!(p.bank_count(), 1);
+        // One bank: stepping stays put.
+        assert_eq!(p.step_bank(1), 0);
+        p.banks.push(Default::default());
+        p.banks.push(Default::default());
+        assert_eq!(p.step_bank(1), 1);
+        assert!(p.current().get(&gid).is_none(), "bank 2 starts empty");
+        assert_eq!(p.step_bank(-2), 2, "wraps backwards");
+        assert_eq!(p.step_bank(1), 0, "wraps forwards");
+        assert_eq!(p.current()[&gid].targets, vec![Target::DefaultOutput]);
+        // Removing the active last bank moves to the one before.
+        p.bank = 2;
+        p.remove_bank(2);
+        assert_eq!((p.bank, p.bank_count()), (1, 2));
+        // A stale bank index falls back to bank 1.
+        p.bank = 7;
+        assert!(p.current().contains_key(&gid));
+        // Old profiles without banks load, and round-trip without new fields.
+        let json = serde_json::to_string(&Profile::nanokontrol2()).unwrap();
+        assert!(!json.contains("\"banks\":") && !json.contains("\"bank\":"));
+        let back: Profile = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.bank_count(), 1);
     }
 }

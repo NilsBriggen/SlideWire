@@ -32,6 +32,7 @@ pids+=($!)
 paplay --raw --client-name=TestTone /dev/zero >/dev/null 2>&1 &
 pids+=($!)
 mkfifo "$WORK/nano"
+export NANO="$WORK/nano"   # PRE_SHOT can send fake controller input: echo "b 59" >"$NANO"
 sleep 1000 >"$WORK/nano" &
 pids+=($!)
 ./target/debug/examples/fake_nano <"$WORK/nano" >"$WORK/nano.log" 2>&1 &
@@ -58,6 +59,8 @@ p["assignments"] = {
     ids["Knob 1"]: {"targets": [tone]},
     ids["Fader 3"]: {"targets": [{"type": "defaultOutput"}]},
 }
+# Bank 2: the test tone on fader 2.
+p["banks"] = [{ids["Fader 2"]: {"targets": [tone]}}]
 json.dump(p, open(path, "w"), indent=1)
 EOF
 
