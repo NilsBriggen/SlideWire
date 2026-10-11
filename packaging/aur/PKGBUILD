@@ -51,5 +51,6 @@ package() {
   install -Dm755 target/release/slidewire "$pkgdir/usr/bin/slidewire"
   install -Dm644 packaging/slidewire.desktop "$pkgdir/usr/share/applications/slidewire.desktop"
   install -Dm644 assets/slidewire.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/slidewire.svg"
+  install -Dm644 packaging/slidewire.service "$pkgdir/usr/lib/systemd/user/slidewire.service"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
 }

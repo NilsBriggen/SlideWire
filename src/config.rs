@@ -265,12 +265,45 @@ fn autostart_path() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|b| b.config_dir().join("autostart").join("slidewire.desktop"))
 }
 
+/// The systemd user unit the package installs; when present, autostart
+/// goes through systemd (restarts on failure, starts with the session).
+const SYSTEMD_UNIT: &str = "/usr/lib/systemd/user/slidewire.service";
+
+fn systemd_unit() -> bool {
+    std::path::Path::new(SYSTEMD_UNIT).exists()
+}
+
+/// `systemctl --user is-enabled` is a process spawn, so its answer is kept.
+static SYSTEMD_ENABLED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
 pub fn autostart_enabled() -> bool {
+    if systemd_unit() {
+        let mut cached = SYSTEMD_ENABLED.lock().unwrap();
+        return *cached.get_or_insert_with(|| {
+            std::process::Command::new("systemctl")
+                .args(["--user", "is-enabled", "--quiet", "slidewire.service"])
+                .status()
+                .is_ok_and(|s| s.success())
+        });
+    }
     autostart_path().is_some_and(|p| p.exists())
 }
 
 pub fn set_autostart(on: bool) -> Result<()> {
     let path = autostart_path().context("no config dir")?;
+    if systemd_unit() {
+        // Don't start twice: drop the desktop-file autostart, use the unit.
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        let status = std::process::Command::new("systemctl")
+            .args(["--user", if on { "enable" } else { "disable" }, "slidewire.service"])
+            .status()
+            .context("systemctl")?;
+        *SYSTEMD_ENABLED.lock().unwrap() = None;
+        anyhow::ensure!(status.success(), "systemctl --user {} failed", if on { "enable" } else { "disable" });
+        return Ok(());
+    }
     if on {
         let exe = std::env::current_exe()?;
         std::fs::create_dir_all(path.parent().unwrap())?;

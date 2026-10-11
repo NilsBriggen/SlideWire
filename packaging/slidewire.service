@@ -1,0 +1,13 @@
+[Unit]
+Description=Slidewire: control app and device volumes with a MIDI controller
+Documentation=https://git.briggen.dev/NilsBriggen/SlideWire
+PartOf=graphical-session.target
+After=graphical-session.target pipewire-pulse.service
+
+[Service]
+ExecStart=/usr/bin/slidewire --minimized
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target
