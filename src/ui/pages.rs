@@ -1,6 +1,6 @@
 //! Buttons, Profiles, Settings and Log pages.
 
-use eframe::egui::{self, RichText, Stroke};
+use eframe::egui::{self, RichText, Stroke, vec2};
 
 use super::controller::port_combo;
 use super::mixer::target_glyph;
@@ -275,7 +275,7 @@ impl App {
                     volume_card(&mut cols[0], &mut s);
                     midi_card(&mut cols[1], &mut s, &ports_out);
                     cols[1].add_space(10.0);
-                    nano_card(&mut cols[1]);
+                    self.nano_card(&mut cols[1]);
                     cols[1].add_space(10.0);
                     self.about_card(&mut cols[1]);
                 });
@@ -289,7 +289,7 @@ impl App {
                 ui.add_space(10.0);
                 midi_card(ui, &mut s, &ports_out);
                 ui.add_space(10.0);
-                nano_card(ui);
+                self.nano_card(ui);
                 ui.add_space(10.0);
                 self.about_card(ui);
             }
@@ -312,6 +312,68 @@ impl App {
             widgets::toggle(ui, &mut s.auto_switch, "Switch to the matching profile when a controller is plugged in");
             widgets::toggle(ui, &mut s.osd, "Show the Plasma volume pop-up when a fader moves");
         });
+    }
+
+    /// LED mode setup as steps, and a test that lights every LED in turn.
+    fn nano_card(&mut self, ui: &mut egui::Ui) {
+        widgets::card(ui, icon::LIGHTBULB, "nanoKONTROL2 LEDs", |ui| {
+            widgets::hint(ui, "The computer can only light the buttons in \"External\" LED mode. Set it once:");
+            for (i, step) in [
+                "Open the Korg KONTROL Editor (it runs under Wine).",
+                "Under Common, set LED Mode to External.",
+                "Write the scene to the device.",
+            ]
+            .iter()
+            .enumerate()
+            {
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
+                    ui.painter().circle_filled(r.center(), 9.0, pal().accent_bg);
+                    ui.painter().text(
+                        r.center(),
+                        egui::Align2::CENTER_CENTER,
+                        (i + 1).to_string(),
+                        semibold(11.5),
+                        pal().text_strong,
+                    );
+                    ui.label(*step);
+                });
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let running = self.led_test.is_some();
+                let text = if running { "Testing…" } else { "Test LEDs" };
+                if ui.add_enabled(!running, egui::Button::new(format!("{}  {text}", icon::LIGHTBULB))).clicked() {
+                    let ids: Vec<String> = {
+                        let sh = self.shared.lock().unwrap();
+                        sh.active()
+                            .map(|p| {
+                                p.controls
+                                    .iter()
+                                    .filter(|(_, c)| c.kind != crate::profile::ControlKind::Fader)
+                                    .map(|(id, _)| id.clone())
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    };
+                    self.led_test = Some((std::time::Instant::now(), ids, 0));
+                }
+                widgets::hint(ui, "Every button should light up once. If none do, LED Mode is still Internal.");
+            });
+        });
+        // Light the next LED every 120 ms.
+        if let Some((start, ids, next)) = &mut self.led_test {
+            let due = (start.elapsed().as_millis() / 120) as usize;
+            while *next <= due && *next < ids.len() {
+                let _ = self.events.send(crate::engine::Event::Ui(UiCmd::SendTest(ids[*next].clone())));
+                *next += 1;
+            }
+            if *next >= ids.len() {
+                self.led_test = None;
+            } else {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(120));
+            }
+        }
     }
 
     fn about_card(&mut self, ui: &mut egui::Ui) {
@@ -536,12 +598,27 @@ fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
     });
 }
 
+/// Volume against fader position, with the straight 1.0 curve for reference.
+fn curve_preview(ui: &mut egui::Ui, exponent: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(84.0, 52.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 4.0, LCD_BG);
+    let inner = rect.shrink(5.0);
+    let at = |x: f32, y: f32| egui::pos2(inner.left() + x * inner.width(), inner.bottom() - y * inner.height());
+    p.line_segment([at(0.0, 0.0), at(1.0, 1.0)], Stroke::new(1.0, LCD_DIM));
+    let pts: Vec<egui::Pos2> =
+        (0..=32).map(|i| i as f32 / 32.0).map(|x| at(x, crate::mapping::curve(x, exponent))).collect();
+    p.add(egui::Shape::line(pts, Stroke::new(1.5, LCD_TEXT)));
+}
+
 fn volume_card(ui: &mut egui::Ui, s: &mut Settings) {
     widgets::card(ui, icon::SPEAKER_HIGH, "Volume", |ui| {
         ui.horizontal(|ui| {
             ui.label("Curve");
-            ui.spacing_mut().slider_width = 220.0;
-            ui.add(egui::Slider::new(&mut s.curve, 0.5..=3.0).step_by(0.1));
+            ui.spacing_mut().slider_width = (ui.available_width() - 200.0).clamp(120.0, 320.0);
+            ui.add(egui::Slider::new(&mut s.curve, 0.5..=3.0).step_by(0.1).fixed_decimals(1));
+            ui.add_space(SP_S);
+            curve_preview(ui, s.curve);
         });
         widgets::hint(
             ui,
@@ -568,15 +645,5 @@ fn midi_card(ui: &mut egui::Ui, s: &mut Settings, ports_out: &[String]) {
             ui.label("Forward all MIDI input to");
             port_combo(ui, "passthru", &mut s.passthru, ports_out);
         });
-    });
-}
-
-fn nano_card(ui: &mut egui::Ui) {
-    widgets::card(ui, icon::LIGHTBULB, "nanoKONTROL2 LEDs", |ui| {
-        ui.label(
-            "The nanoKONTROL2 only lets the computer control its button LEDs in \"External\" LED mode. \
-             Set LED Mode to External once with the Korg KONTROL Editor (it runs under Wine) and write \
-             it to the device; otherwise the buttons still work but their LEDs only light while pressed.",
-        );
     });
 }
