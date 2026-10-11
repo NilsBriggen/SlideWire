@@ -6,6 +6,16 @@ Built for KDE Plasma on PipeWire (or PulseAudio). The audio, MIDI and mixer part
 
 ## Build and install
 
+On Arch and derivatives, build the package from the bundled PKGBUILD:
+
+```sh
+git clone https://git.briggen.dev/NilsBriggen/SlideWire.git
+cd SlideWire/packaging/aur
+makepkg -si
+```
+
+Elsewhere, build it with Cargo:
+
 ```sh
 cargo build --release
 ./target/release/slidewire --install-icon   # adds a menu entry + icon for your user
