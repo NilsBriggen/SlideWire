@@ -30,10 +30,16 @@ pub fn glow(painter: &egui::Painter, rect: Rect, radius: f32, color: Color32, bl
 
 /// Raised panel: body plus 1px bevel highlight on top and shadow at the bottom.
 pub fn bevel_panel(painter: &egui::Painter, rect: Rect, radius: u8, top: Color32, bottom: Color32) {
+    // Edges follow the body colour, so light chrome and dark hardware both work.
+    let light = theme::luminance(top) > 0.5;
+    let (shadow, edge, sheen) = if light {
+        (Color32::from_black_alpha(40), theme::mix(top, Color32::BLACK, 0.16), Color32::from_white_alpha(220))
+    } else {
+        (Color32::from_black_alpha(110), theme::mix(top, Color32::WHITE, 0.05), Color32::from_white_alpha(22))
+    };
     // Drop shadow.
     painter.add(
-        RectShape::filled(rect.translate(vec2(0.0, 3.0)), CornerRadius::same(radius), Color32::from_black_alpha(110))
-            .with_blur_width(10.0),
+        RectShape::filled(rect.translate(vec2(0.0, 3.0)), CornerRadius::same(radius), shadow).with_blur_width(10.0),
     );
     painter.rect_filled(rect, radius, bottom);
     // Gradient body inset by the corner radius so corners stay rounded.
@@ -44,10 +50,10 @@ pub fn bevel_panel(painter: &egui::Painter, rect: Rect, radius: u8, top: Color32
         CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 },
         top,
     );
-    painter.rect_stroke(rect, radius, Stroke::new(1.0, Color32::from_rgb(0x33, 0x36, 0x41)), StrokeKind::Inside);
+    painter.rect_stroke(rect, radius, Stroke::new(1.0, edge), StrokeKind::Inside);
     painter.line_segment(
         [pos2(rect.left() + radius as f32, rect.top() + 1.0), pos2(rect.right() - radius as f32, rect.top() + 1.0)],
-        Stroke::new(1.0, Color32::from_white_alpha(22)),
+        Stroke::new(1.0, sheen),
     );
 }
 
@@ -91,13 +97,13 @@ pub fn fader(ui: &mut Ui, pos: &mut f32, size: Vec2, color: Color32, ghost: Opti
         let y = track.bottom() - travel * i as f32 / 10.0;
         let major = i % 5 == 0;
         let len = if major { 8.0 } else { 4.0 };
-        let c = if major { TEXT_FAINT } else { Color32::from_rgb(0x3a, 0x3d, 0x48) };
+        let c = if major { pal().text_faint } else { pal().tick };
         painter.line_segment([pos2(track.left() - 6.0 - len, y), pos2(track.left() - 6.0, y)], Stroke::new(1.0, c));
         painter.line_segment([pos2(track.right() + 6.0, y), pos2(track.right() + 6.0 + len, y)], Stroke::new(1.0, c));
     }
     // Slot.
     painter.rect_filled(track, 3.0, SLOT);
-    painter.line_segment([track.left_bottom(), track.right_bottom()], Stroke::new(1.0, Color32::from_white_alpha(16)));
+    painter.line_segment([track.left_bottom(), track.right_bottom()], Stroke::new(1.0, pal().sheen(16)));
     // Level fill.
     let y = track.bottom() - travel * *pos;
     let fill = Rect::from_min_max(pos2(track.center().x - 1.5, y), pos2(track.center().x + 1.5, track.bottom()));
@@ -204,7 +210,7 @@ pub fn knob(ui: &mut Ui, pos: &mut f32, diameter: f32, color: Color32, ghost: Op
     let hot = response.hovered() || response.dragged();
     let tip = c + (body_r - 3.0) * vec2(value.cos(), value.sin());
     let base = c + (body_r * 0.25) * vec2(value.cos(), value.sin());
-    painter.line_segment([base, tip], Stroke::new(2.5, if hot { Color32::WHITE } else { TEXT }));
+    painter.line_segment([base, tip], Stroke::new(2.5, if hot { Color32::WHITE } else { hw::TEXT }));
     response.on_hover_cursor(egui::CursorIcon::ResizeVertical)
 }
 
@@ -336,16 +342,16 @@ pub fn lcd(ui: &mut Ui, size: Vec2, icon: Option<egui::Image<'_>>, text: &str, d
 /// Rounded panel with a header line.
 pub fn card<R>(ui: &mut Ui, icon: &str, title: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::new()
-        .fill(CARD)
-        .stroke(Stroke::new(1.0, Color32::from_rgb(0x2c, 0x2f, 0x39)))
+        .fill(pal().card)
+        .stroke(Stroke::new(1.0, pal().border))
         .corner_radius(10)
         .inner_margin(egui::Margin::same(14))
-        .shadow(egui::epaint::Shadow { offset: [0, 3], blur: 10, spread: 0, color: Color32::from_black_alpha(90) })
+        .shadow(egui::epaint::Shadow { offset: [0, 3], blur: 10, spread: 0, color: pal().shadow(90) })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             if !title.is_empty() {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(icon).size(17.0).color(CYAN));
+                    ui.label(egui::RichText::new(icon).size(17.0).color(pal().accent));
                     ui.label(egui::RichText::new(title).font(semibold(15.0)));
                 });
                 ui.add_space(4.0);
@@ -358,8 +364,8 @@ pub fn card<R>(ui: &mut Ui, icon: &str, title: &str, add_contents: impl FnOnce(&
 /// Small rounded status chip with an LED dot.
 pub fn pill(ui: &mut Ui, led: Option<Color32>, text: &str) -> Response {
     egui::Frame::new()
-        .fill(Color32::from_rgb(0x22, 0x24, 0x2c))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(0x33, 0x36, 0x41)))
+        .fill(pal().inset)
+        .stroke(Stroke::new(1.0, pal().border_strong))
         .corner_radius(20)
         .inner_margin(egui::Margin::symmetric(10, 4))
         .show(ui, |ui| {
@@ -367,7 +373,7 @@ pub fn pill(ui: &mut Ui, led: Option<Color32>, text: &str) -> Response {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if let Some(c) = led {
                     let (r, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
-                    if c != TEXT_FAINT {
+                    if c != pal().text_faint {
                         glow(
                             ui.painter(),
                             Rect::from_center_size(r.center(), Vec2::splat(6.0)),
@@ -403,12 +409,63 @@ pub fn icon_button(ui: &mut Ui, icon: &str, label: &str) -> Response {
 
 /// Hint text in a faint colour.
 pub fn hint(ui: &mut Ui, text: &str) -> Response {
-    ui.label(egui::RichText::new(text).size(12.5).color(TEXT_DIM))
+    ui.label(egui::RichText::new(text).size(12.5).color(pal().text_dim))
+}
+
+/// A row of mutually exclusive options in one rounded track.
+pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str)]) -> Response {
+    let p = pal();
+    let font = egui::FontId::proportional(13.5);
+    let galleys: Vec<_> =
+        options.iter().map(|(_, l)| ui.painter().layout_no_wrap(l.to_string(), font.clone(), p.text)).collect();
+    let seg_w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max) + 24.0;
+    let size = vec2(seg_w * options.len() as f32 + 4.0, 28.0);
+    let (rect, mut response) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 8.0, p.control);
+    painter.rect_stroke(rect, 8.0, Stroke::new(1.0, p.border_strong), StrokeKind::Inside);
+    let selected = options.iter().position(|(v, _)| v == value).unwrap_or(0);
+    // The highlight slides between segments.
+    let x = ui.ctx().animate_value_with_time(response.id.with("seg"), selected as f32, 0.12);
+    let hl = Rect::from_min_size(pos2(rect.left() + 2.0 + x * seg_w, rect.top() + 2.0), vec2(seg_w, size.y - 4.0));
+    painter.rect_filled(hl, 6.0, p.accent_bg);
+    painter.rect_stroke(hl, 6.0, Stroke::new(1.0, p.accent.gamma_multiply(0.6)), StrokeKind::Inside);
+    for (i, ((v, _), g)) in options.iter().zip(galleys).enumerate() {
+        let seg = Rect::from_min_size(pos2(rect.left() + 2.0 + i as f32 * seg_w, rect.top()), vec2(seg_w, size.y));
+        let r = ui.interact(seg, response.id.with(i), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if r.clicked() && *value != *v {
+            *value = *v;
+            response.mark_changed();
+        }
+        let color = if i == selected {
+            p.text_strong
+        } else if r.hovered() {
+            p.text
+        } else {
+            p.text_dim
+        };
+        ui.painter().galley(seg.center() - g.size() / 2.0, g, color);
+    }
+    response
+}
+
+/// Round colour swatch; ringed when selected.
+pub fn swatch(ui: &mut Ui, color: Color32, selected: bool, tooltip: &str) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+    let hot = ui.ctx().animate_bool(response.id, response.hovered() || selected);
+    let painter = ui.painter();
+    let c = rect.center();
+    if selected {
+        painter.circle_stroke(c, 13.0, Stroke::new(2.0, color));
+    }
+    painter.circle_filled(c, 8.5 + 1.5 * hot, color);
+    painter.circle_stroke(c, 8.5 + 1.5 * hot, Stroke::new(1.0, pal().shadow(90)));
+    response.on_hover_text(tooltip).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Pill-shaped on/off switch with a label; glows cyan when on.
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(14.0), TEXT);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(14.0), pal().text);
     let sw = vec2(36.0, 20.0);
     let size = vec2(sw.x + 10.0 + galley.size().x, sw.y.max(galley.size().y) + 4.0);
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
@@ -420,20 +477,16 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let track = Rect::from_min_size(pos2(rect.left(), rect.center().y - sw.y / 2.0), sw);
     let painter = ui.painter();
     if t > 0.0 {
-        glow(painter, track, 10.0, CYAN.gamma_multiply(0.35 * t), 10.0);
+        glow(painter, track, 10.0, pal().accent.gamma_multiply(0.35 * t), 10.0);
     }
-    let off = Color32::from_rgb(0x2b, 0x2e, 0x38);
-    painter.rect_filled(track, 10.0, lerp_color(off, CYAN.gamma_multiply(0.85), t));
-    painter.rect_stroke(track, 10.0, Stroke::new(1.0, Color32::from_rgb(0x3c, 0x40, 0x4c)), StrokeKind::Inside);
+    let p = pal();
+    painter.rect_filled(track, 10.0, theme::mix(p.control, p.accent, t * 0.85));
+    painter.rect_stroke(track, 10.0, Stroke::new(1.0, p.control_stroke), StrokeKind::Inside);
     let x = egui::lerp(track.left() + 10.0..=track.right() - 10.0, t);
     painter.circle_filled(pos2(x, track.center().y + 1.0), 7.5, Color32::from_black_alpha(90));
-    painter.circle_filled(pos2(x, track.center().y), 7.0, if response.hovered() { Color32::WHITE } else { TEXT });
-    let color = if response.hovered() { Color32::WHITE } else { TEXT };
+    let thumb = if response.hovered() { Color32::WHITE } else { Color32::from_rgb(0xec, 0xee, 0xf2) };
+    painter.circle_filled(pos2(x, track.center().y), 7.0, thumb);
+    let color = if response.hovered() { p.text_strong } else { p.text };
     painter.galley(pos2(track.right() + 10.0, rect.center().y - galley.size().y / 2.0), galley, color);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
-
-fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
-    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
 }

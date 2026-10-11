@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
-use eframe::egui::{self, Color32, RichText, Sense, Stroke, Vec2, pos2, vec2};
+use eframe::egui::{self, RichText, Sense, Stroke, Vec2, pos2, vec2};
 
 use crate::WindowCmd;
 use crate::engine::{Event, SharedRef, UiCmd};
@@ -68,6 +68,8 @@ impl App {
         window: Receiver<WindowCmd>,
     ) -> App {
         theme::install(&cc.egui_ctx);
+        let ctx = cc.egui_ctx.clone();
+        crate::appearance::watch(move || ctx.request_repaint());
         egui_extras::install_image_loaders(&cc.egui_ctx);
         {
             let mut sh = shared.lock().unwrap();
@@ -218,7 +220,7 @@ impl App {
                         (if blink { ASSIGN } else { RUN }, format!("{p} · {}", crate::midi::display_name(port)))
                     }
                     (None, Some(p)) => (MUTE, format!("{p} · not connected")),
-                    _ => (TEXT_FAINT, "No profile".into()),
+                    _ => (pal().text_faint, "No profile".into()),
                 };
                 let pill = widgets::pill(ui, Some(led), &text)
                     .interact(Sense::click())
@@ -238,7 +240,7 @@ impl App {
                 if let Some((s, at)) = &self.status
                     && at.elapsed() < Duration::from_secs(6)
                 {
-                    ui.label(RichText::new(s).color(CYAN));
+                    ui.label(RichText::new(s).color(pal().accent));
                     ui.ctx().request_repaint_after(Duration::from_secs(1));
                 }
             });
@@ -280,7 +282,7 @@ impl App {
                         ui.label(RichText::new(ic).size(18.0).color(color));
                         ui.vertical(|ui| {
                             ui.label(RichText::new(&c.title).font(semibold(14.0)));
-                            ui.add(egui::Label::new(RichText::new(&c.detail).color(TEXT_DIM).size(12.5)).wrap());
+                            ui.add(egui::Label::new(RichText::new(&c.detail).color(pal().text_dim).size(12.5)).wrap());
                         });
                     });
                     ui.add_space(4.0);
@@ -295,21 +297,21 @@ impl App {
 /// Page switcher button: icon + label, cyan underline when selected.
 fn tab_button(ui: &mut egui::Ui, ic: &str, label: &str, selected: bool) -> egui::Response {
     let text = format!("{ic}  {label}");
-    let galley = ui.painter().layout_no_wrap(text, egui::FontId::proportional(14.0), TEXT);
+    let galley = ui.painter().layout_no_wrap(text, egui::FontId::proportional(14.0), pal().text);
     let size = galley.size() + vec2(20.0, 14.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hot = response.hovered();
     if selected {
-        ui.painter().rect_filled(rect, 6.0, Color32::from_rgb(0x1f, 0x2a, 0x33));
+        ui.painter().rect_filled(rect, 6.0, theme::mix(pal().panel_deep, pal().accent, 0.12));
     } else if hot {
-        ui.painter().rect_filled(rect, 6.0, Color32::from_rgb(0x25, 0x27, 0x30));
+        ui.painter().rect_filled(rect, 6.0, pal().control);
     }
     let color = if selected {
-        CYAN
+        pal().accent
     } else if hot {
-        Color32::WHITE
+        pal().text_strong
     } else {
-        TEXT_DIM
+        pal().text_dim
     };
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
     if selected {
@@ -317,8 +319,8 @@ fn tab_button(ui: &mut egui::Ui, ic: &str, label: &str, selected: bool) -> egui:
             pos2(rect.left() + 8.0, rect.bottom() - 2.0),
             pos2(rect.right() - 8.0, rect.bottom()),
         );
-        widgets::glow(ui.painter(), bar, 1.0, CYAN.gamma_multiply(0.5), 6.0);
-        ui.painter().rect_filled(bar, 1.0, CYAN);
+        widgets::glow(ui.painter(), bar, 1.0, pal().accent.gamma_multiply(0.5), 6.0);
+        ui.painter().rect_filled(bar, 1.0, pal().accent);
     }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -336,13 +338,15 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_window_cmds(&ctx);
+        let settings = self.shared.lock().unwrap().store.settings.clone();
+        theme::sync(&ctx, &settings);
 
         egui::Panel::top("top")
             .frame(
                 egui::Frame::new()
-                    .fill(PANEL_DEEP)
+                    .fill(pal().panel_deep)
                     .inner_margin(egui::Margin::symmetric(14, 9))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(0x26, 0x28, 0x31))),
+                    .stroke(Stroke::new(1.0, pal().border)),
             )
             .show(ui, |ui| self.top_bar(ui));
 
@@ -351,21 +355,20 @@ impl eframe::App for App {
                 .resizable(true)
                 .default_size(340.0)
                 .size_range(280.0..=520.0)
-                .frame(egui::Frame::new().fill(PANEL_DEEP).inner_margin(egui::Margin::same(12)))
+                .frame(egui::Frame::new().fill(pal().panel_deep).inner_margin(egui::Margin::same(12)))
                 .show(ui, |ui| self.sources(ui));
         }
 
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::same(16))).show(
-            ui,
-            |ui| match self.tab {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(pal().panel).inner_margin(egui::Margin::same(16)))
+            .show(ui, |ui| match self.tab {
                 Tab::Mixer => self.mixer(ui),
                 Tab::Controller => self.controller(ui),
                 Tab::Buttons => self.buttons(ui),
                 Tab::Profiles => self.profiles(ui),
                 Tab::Settings => self.settings(ui),
                 Tab::Log => self.log(ui),
-            },
-        );
+            });
         self.doctor_window(&ctx);
 
         // Everything that moves asks for its own frames (engine events, meter

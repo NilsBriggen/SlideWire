@@ -2,6 +2,7 @@
 //! controller.
 
 mod actions;
+mod appearance;
 mod audio;
 mod config;
 mod dbus;

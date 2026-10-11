@@ -4,7 +4,7 @@ use eframe::egui::{self, RichText, Stroke};
 
 use super::controller::port_combo;
 use super::mixer::target_glyph;
-use super::theme::{icon, *};
+use super::theme::{self, icon, *};
 use super::widgets;
 use super::{App, PickPurpose, Tab};
 use crate::audio::AudioState;
@@ -109,17 +109,17 @@ impl App {
                 let is_active = active.as_deref() == Some(id.as_str());
                 let connected = crate::midi::find_port(&ports_in, &p.input).is_some();
                 egui::Frame::new()
-                    .fill(CARD)
+                    .fill(pal().card)
                     .stroke(Stroke::new(
                         if is_active { 1.5 } else { 1.0 },
-                        if is_active { CYAN } else { egui::Color32::from_rgb(0x2c, 0x2f, 0x39) },
+                        if is_active { pal().accent } else { pal().border },
                     ))
                     .corner_radius(10)
                     .inner_margin(egui::Margin::symmetric(14, 10))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            let led = if connected { RUN } else { TEXT_FAINT };
+                            let led = if connected { RUN } else { pal().text_faint };
                             let (r, _) = ui.allocate_exact_size(egui::Vec2::splat(12.0), egui::Sense::hover());
                             if connected {
                                 widgets::glow(
@@ -136,7 +136,7 @@ impl App {
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(&p.name).font(semibold(15.0)));
                                     if is_active {
-                                        widgets::chip(ui, "ACTIVE", CYAN);
+                                        widgets::chip(ui, "ACTIVE", pal().accent);
                                     }
                                 });
                                 let status = if connected { "connected" } else { "not connected" };
@@ -270,6 +270,8 @@ impl App {
                 ui.columns(2, |cols| {
                     self.general_card(&mut cols[0], &mut s);
                     cols[0].add_space(10.0);
+                    appearance_card(&mut cols[0], &mut s);
+                    cols[0].add_space(10.0);
                     volume_card(&mut cols[0], &mut s);
                     midi_card(&mut cols[1], &mut s, &ports_out);
                     cols[1].add_space(10.0);
@@ -280,6 +282,8 @@ impl App {
             } else {
                 ui.set_max_width(760.0);
                 self.general_card(ui, &mut s);
+                ui.add_space(10.0);
+                appearance_card(ui, &mut s);
                 ui.add_space(10.0);
                 volume_card(ui, &mut s);
                 ui.add_space(10.0);
@@ -315,7 +319,7 @@ impl App {
             ui.label(format!("Slidewire {}", env!("CARGO_PKG_VERSION")));
             let dir = self.shared.lock().unwrap().store.dir.clone();
             ui.horizontal(|ui| {
-                ui.label(RichText::new(dir.display().to_string()).font(mono(12.0)).color(TEXT_DIM));
+                ui.label(RichText::new(dir.display().to_string()).font(mono(12.0)).color(pal().text_dim));
                 if ui.small_button(format!("{}  Open", icon::FOLDER_OPEN)).clicked()
                     && let Err(e) = std::process::Command::new("xdg-open").arg(&dir).spawn()
                 {
@@ -500,6 +504,36 @@ fn device_checklist(ui: &mut egui::Ui, names: &mut Vec<String>, devices: &[crate
             widgets::hint(ui, &format!("{n} (not connected)"));
         }
     }
+}
+
+fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
+    use crate::config::{Accent, ThemeMode};
+    widgets::card(ui, icon::PALETTE, "Appearance", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Theme");
+            ui.add_space(SP_S);
+            widgets::segmented(
+                ui,
+                &mut s.theme,
+                &[(ThemeMode::System, "System"), (ThemeMode::Dark, "Dark"), (ThemeMode::Light, "Light")],
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Accent");
+            ui.add_space(SP_S);
+            let system = crate::appearance::system().accent;
+            for a in Accent::ALL {
+                if a == Accent::System && system.is_none() {
+                    continue;
+                }
+                let c = theme::accent_color(a, system);
+                if widgets::swatch(ui, c, s.accent == a, a.label()).clicked() {
+                    s.accent = a;
+                }
+            }
+        });
+        widgets::toggle(ui, &mut s.reduce_motion, "Reduce motion");
+    });
 }
 
 fn volume_card(ui: &mut egui::Ui, s: &mut Settings) {

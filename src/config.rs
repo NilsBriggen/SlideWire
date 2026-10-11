@@ -30,6 +30,49 @@ pub struct Settings {
     pub auto_switch: bool,
     /// Soft takeover: a fader only changes the volume once it reaches it.
     pub pickup: bool,
+    pub theme: ThemeMode,
+    pub accent: Accent,
+    /// Skip UI animations.
+    pub reduce_motion: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemeMode {
+    /// Follow the desktop's light/dark preference.
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Accent {
+    #[default]
+    Cyan,
+    Violet,
+    Green,
+    Amber,
+    Pink,
+    /// The desktop's accent colour.
+    System,
+}
+
+impl Accent {
+    pub const ALL: [Accent; 6] =
+        [Accent::Cyan, Accent::Violet, Accent::Green, Accent::Amber, Accent::Pink, Accent::System];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Accent::Cyan => "Cyan",
+            Accent::Violet => "Violet",
+            Accent::Green => "Green",
+            Accent::Amber => "Amber",
+            Accent::Pink => "Pink",
+            Accent::System => "Desktop",
+        }
+    }
 }
 
 impl Default for Settings {
@@ -45,6 +88,9 @@ impl Default for Settings {
             active_profile: None,
             auto_switch: true,
             pickup: true,
+            theme: ThemeMode::System,
+            accent: Accent::Cyan,
+            reduce_motion: false,
         }
     }
 }

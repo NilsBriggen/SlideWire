@@ -73,7 +73,7 @@ impl App {
                 });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(icon::MAGNIFYING_GLASS).color(TEXT_DIM));
+                    ui.label(RichText::new(icon::MAGNIFYING_GLASS).color(pal().text_dim));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.control_search)
                             .hint_text("Filter controls")
@@ -117,28 +117,28 @@ impl App {
                             let stroke = if learning {
                                 Stroke::new(1.5, ASSIGN)
                             } else if touched {
-                                Stroke::new(1.5, CYAN)
+                                Stroke::new(1.5, pal().accent)
                             } else if open {
-                                Stroke::new(1.0, egui::Color32::from_rgb(0x4a, 0x4f, 0x5f))
+                                Stroke::new(1.0, pal().control_hover_stroke)
                             } else {
-                                Stroke::new(1.0, egui::Color32::from_rgb(0x2c, 0x2f, 0x39))
+                                Stroke::new(1.0, pal().border)
                             };
                             egui::Frame::new()
-                                .fill(egui::Color32::from_rgb(0x19, 0x1a, 0x20))
+                                .fill(pal().inset)
                                 .stroke(stroke)
                                 .corner_radius(6)
                                 .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         let (glyph, color) = match c.kind {
-                                            ControlKind::Fader if c.delta.is_some() => (icon::ARROWS_CLOCKWISE, CYAN),
-                                            ControlKind::Fader => (icon::FADERS, CYAN),
+                                            ControlKind::Fader if c.delta.is_some() => (icon::ARROWS_CLOCKWISE, pal().accent),
+                                            ControlKind::Fader => (icon::FADERS, pal().accent),
                                             ControlKind::Button => (icon::CURSOR_CLICK, ASSIGN),
                                             ControlKind::Output => (icon::LIGHTNING, RUN),
                                         };
                                         ui.label(RichText::new(glyph).size(16.0).color(color));
                                         ui.add(egui::TextEdit::singleline(&mut c.name).desired_width(150.0));
-                                        widgets::chip(ui, &message_summary(c), TEXT_DIM);
+                                        widgets::chip(ui, &message_summary(c), pal().text_dim);
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                             if ui.button(icon::TRASH).on_hover_text("Delete").clicked() {
                                                 remove = Some(id.clone());
@@ -268,7 +268,7 @@ fn message_summary(c: &Control) -> String {
 
 fn role_color(r: Role) -> egui::Color32 {
     match r {
-        Role::Faders | Role::Indicators | Role::Meters => CYAN,
+        Role::Faders | Role::Indicators | Role::Meters => pal().accent,
         Role::Mute | Role::MuteIndicators => MUTE,
         Role::Assign | Role::AssignIndicators => ASSIGN,
         Role::Run | Role::RunIndicators => RUN,

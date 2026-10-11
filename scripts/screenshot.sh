@@ -6,7 +6,8 @@
 #   scripts/screenshot.sh OUT_DIR [tab...]     tabs: mixer controller buttons profiles settings log doctor
 #
 # Env: SIZE=1440x900 (screen size), KEEP=1 (leave the app running on :77),
-#      PRE_SHOT="xdotool ..." (run on the private display before each shot).
+#      PRE_SHOT="xdotool ..." (run on the private display before each shot),
+#      SETTINGS='{"theme":"light"}' (merged into settings.json).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -46,9 +47,13 @@ mkdir -p "$CFG/profiles"
 # Let the app write its default profile with a short run, then adjust it.
 env -u WAYLAND_DISPLAY DISPLAY=$DISP SLIDEWIRE_CONFIG="$CFG" SLIDEWIRE_INSTANCE=shot \
     timeout 3 ./target/debug/slidewire --minimized >/dev/null 2>&1 || true
-python3 - "$CFG" <<'EOF'
-import json, glob, sys
+python3 - "$CFG" "${SETTINGS:-{\}}" <<'EOF'
+import json, glob, os, sys
 cfg = sys.argv[1]
+sp = cfg + "/settings.json"
+st = json.load(open(sp)) if os.path.exists(sp) else {}
+st.update(json.loads(sys.argv[2]))
+json.dump(st, open(sp, "w"), indent=1)
 path = glob.glob(cfg + "/profiles/*.json")[0]
 p = json.load(open(path))
 p["input"] = p["output"] = "FakeNano"

@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use eframe::egui::{self, Color32, RichText, Sense, Stroke, StrokeKind, Vec2, vec2};
+use eframe::egui::{self, RichText, Sense, Stroke, StrokeKind, Vec2, vec2};
 
 use super::App;
 use super::theme::{icon, *};
@@ -117,13 +117,19 @@ impl App {
                 if row.is_empty() {
                     continue;
                 }
-                ui.label(RichText::new(label.to_uppercase()).size(11.0).color(TEXT_FAINT));
+                ui.label(RichText::new(label.to_uppercase()).size(11.0).color(pal().text_faint));
                 let w = strip_width(avail, row.len());
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = GAP;
                     for s in row.iter() {
                         let (rect, _) = ui.allocate_exact_size(vec2(w, height), Sense::hover());
-                        widgets::bevel_panel(&ui.painter_at(rect.expand(12.0)), rect, 8, STRIP_TOP, STRIP_BOTTOM);
+                        widgets::bevel_panel(
+                            &ui.painter_at(rect.expand(12.0)),
+                            rect,
+                            8,
+                            pal().strip_top,
+                            pal().strip_bottom,
+                        );
                         self.section(ui, s, rect, &audio, false, Some(&s.name), dragging);
                     }
                 });
@@ -218,23 +224,18 @@ impl App {
     fn channel_strip(&mut self, ui: &mut egui::Ui, c: &Channel, audio: &AudioState, size: Vec2, dragging: bool) {
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         let painter = ui.painter_at(rect.expand(12.0));
-        widgets::bevel_panel(&painter, rect, 8, STRIP_TOP, STRIP_BOTTOM);
+        widgets::bevel_panel(&painter, rect, 8, pal().strip_top, pal().strip_bottom);
         let head = egui::Rect::from_min_size(rect.min, vec2(rect.width(), 28.0));
-        painter.text(head.center(), egui::Align2::CENTER_CENTER, c.no.to_string(), semibold(15.0), TEXT_DIM);
+        painter.text(head.center(), egui::Align2::CENTER_CENTER, c.no.to_string(), semibold(15.0), pal().text_dim);
         let split = head.bottom() + CHANNEL_KNOB_H;
         let knob_zone =
             egui::Rect::from_min_max(egui::pos2(rect.left(), head.bottom()), egui::pos2(rect.right(), split));
         let fader_zone = egui::Rect::from_min_max(egui::pos2(rect.left(), split), rect.max);
         // Engraved divider.
         let (l, r) = (rect.left() + 10.0, rect.right() - 10.0);
-        painter.line_segment(
-            [egui::pos2(l, split), egui::pos2(r, split)],
-            Stroke::new(1.0, Color32::from_black_alpha(140)),
-        );
-        painter.line_segment(
-            [egui::pos2(l, split + 1.0), egui::pos2(r, split + 1.0)],
-            Stroke::new(1.0, Color32::from_white_alpha(10)),
-        );
+        painter.line_segment([egui::pos2(l, split), egui::pos2(r, split)], Stroke::new(1.0, pal().shadow(140)));
+        painter
+            .line_segment([egui::pos2(l, split + 1.0), egui::pos2(r, split + 1.0)], Stroke::new(1.0, pal().sheen(10)));
         self.section(ui, c.knob, knob_zone, audio, true, None, dragging);
         self.section(ui, c.fader, fader_zone, audio, false, None, dragging);
     }
@@ -258,10 +259,15 @@ impl App {
         let empty = s.targets.is_empty();
         let hovering = response.dnd_hover_payload::<Target>().is_some();
         if hovering {
-            widgets::glow(&painter, zone.shrink(2.0), 8.0, CYAN.gamma_multiply(0.35), 14.0);
-            painter.rect_stroke(zone.shrink(2.0), 8.0, Stroke::new(2.0, CYAN), StrokeKind::Inside);
+            widgets::glow(&painter, zone.shrink(2.0), 8.0, pal().accent.gamma_multiply(0.35), 14.0);
+            painter.rect_stroke(zone.shrink(2.0), 8.0, Stroke::new(2.0, pal().accent), StrokeKind::Inside);
         } else if dragging {
-            painter.rect_stroke(zone.shrink(3.0), 7.0, Stroke::new(1.0, CYAN.gamma_multiply(0.35)), StrokeKind::Inside);
+            painter.rect_stroke(
+                zone.shrink(3.0),
+                7.0,
+                Stroke::new(1.0, pal().accent.gamma_multiply(0.35)),
+                StrokeKind::Inside,
+            );
         }
         if let Some(t) = response.dnd_release_payload::<Target>() {
             self.add_target(&s.id, (*t).clone());
@@ -297,7 +303,7 @@ impl App {
                 }
 
                 let hold = self.peak_hold(ui, s);
-                let color = if s.muted { CYAN.gamma_multiply(0.35) } else { CYAN };
+                let color = if s.muted { pal().accent.gamma_multiply(0.35) } else { pal().accent };
                 let mut pos = s.position;
                 if compact {
                     let d = 58.0;
@@ -342,14 +348,14 @@ impl App {
                     readout(ui, s, 13.0);
                     if let Some(v) = s.volume.filter(|_| !s.muted) {
                         ui.add_space(-6.0);
-                        ui.label(RichText::new(db_text(v)).font(mono(10.5)).color(TEXT_FAINT));
+                        ui.label(RichText::new(db_text(v)).font(mono(10.5)).color(pal().text_faint));
                     }
                 }
             });
         }
         // Unassigned strips recede until something is dragged onto them.
         if empty && !dragging {
-            painter.rect_filled(zone.shrink(1.0), 8.0, Color32::from_rgba_unmultiplied(0x15, 0x16, 0x1b, 120));
+            painter.rect_filled(zone.shrink(1.0), 8.0, pal().veil(120));
         }
         response.context_menu(|ui| self.assign_menu(ui, s, audio));
     }
@@ -673,13 +679,13 @@ impl App {
             let id = ui.id().with(("src", kind as u8, index));
             ui.dnd_drag_source(id, target, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(icon::DOTS_SIX_VERTICAL).color(TEXT_FAINT));
+                    ui.label(RichText::new(icon::DOTS_SIX_VERTICAL).color(pal().text_faint));
                     match &img {
                         Some(i) => {
                             ui.add(i.clone().fit_to_exact_size(Vec2::splat(22.0)));
                         }
                         None => {
-                            ui.label(RichText::new(icon::WAVEFORM).size(18.0).color(TEXT_DIM));
+                            ui.label(RichText::new(icon::WAVEFORM).size(18.0).color(pal().text_dim));
                         }
                     }
                     ui.vertical(|ui| {
@@ -687,7 +693,7 @@ impl App {
                         ui.set_width(146.0);
                         ui.add(egui::Label::new(RichText::new(name).size(13.0)).truncate());
                         if let Some(sub) = &sub {
-                            ui.add(egui::Label::new(RichText::new(sub).size(11.0).color(TEXT_DIM)).truncate());
+                            ui.add(egui::Label::new(RichText::new(sub).size(11.0).color(pal().text_dim)).truncate());
                         }
                     });
                 });
@@ -712,9 +718,9 @@ impl App {
             });
             if let Some((is_default, dev_name)) = &default {
                 let star = if *is_default {
-                    RichText::new(icon::STAR).color(ASSIGN)
+                    RichText::new(icon::STAR).color(pal().warn_text)
                 } else {
-                    RichText::new(icon::STAR).color(TEXT_FAINT)
+                    RichText::new(icon::STAR).color(pal().text_faint)
                 };
                 if ui
                     .add(egui::Button::new(star).frame(false))
@@ -726,9 +732,9 @@ impl App {
                 }
             }
             let m = if mute {
-                RichText::new(icon::SPEAKER_SLASH).color(MUTE)
+                RichText::new(icon::SPEAKER_SLASH).color(pal().mute_text)
             } else {
-                RichText::new(icon::SPEAKER_HIGH).color(TEXT_DIM)
+                RichText::new(icon::SPEAKER_HIGH).color(pal().text_dim)
             };
             if ui.add(egui::Button::new(m).frame(false)).on_hover_text(if mute { "Unmute" } else { "Mute" }).clicked() {
                 self.send(UiCmd::SetStreamMute(kind, index, !mute));
@@ -737,7 +743,7 @@ impl App {
             if let Some((current, devices)) = route {
                 let hover = if kind == Kind::SinkInput { "Play on…" } else { "Record from…" };
                 let button = ui
-                    .add(egui::Button::new(RichText::new(icon::CARET_DOWN).color(TEXT_DIM)).frame(false))
+                    .add(egui::Button::new(RichText::new(icon::CARET_DOWN).color(pal().text_dim)).frame(false))
                     .on_hover_text(hover);
                 egui::Popup::menu(&button).show(|ui| {
                     ui.label(RichText::new(hover).font(semibold(13.0)));
@@ -787,16 +793,18 @@ fn readout(ui: &mut egui::Ui, s: &StripView, size: f32) {
     match s.pickup {
         Some(hw) if !s.muted => {
             let arrow = if hw < s.position { icon::ARROW_UP } else { icon::ARROW_DOWN };
-            ui.label(RichText::new(format!("{arrow}{:>3.0}%", s.position * 100.0)).font(mono(size)).color(ASSIGN))
-                .on_hover_text(format!(
-                    "Your controller is at {:.0}%. Move it {} to the volume to take over.",
-                    hw * 100.0,
-                    if hw < s.position { "up" } else { "down" }
-                ));
+            ui.label(
+                RichText::new(format!("{arrow}{:>3.0}%", s.position * 100.0)).font(mono(size)).color(pal().warn_text),
+            )
+            .on_hover_text(format!(
+                "Your controller is at {:.0}%. Move it {} to the volume to take over.",
+                hw * 100.0,
+                if hw < s.position { "up" } else { "down" }
+            ));
         }
         _ => {
             let text = if s.muted { "MUTE".to_string() } else { format!("{:>3.0}%", s.position * 100.0) };
-            ui.label(RichText::new(text).font(mono(size)).color(if s.muted { MUTE } else { LCD_TEXT }));
+            ui.label(RichText::new(text).font(mono(size)).color(if s.muted { pal().mute_text } else { pal().readout }));
         }
     }
 }
