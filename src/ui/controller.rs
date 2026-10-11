@@ -40,8 +40,10 @@ impl App {
                 learning: learn.as_ref().map(|l| l.control_id.as_str()),
                 selected: self.expanded_control.as_deref(),
             };
+            let mut scroll_to = None;
             if let Some(id) = diagram::draw(ui, &p, &live) {
                 self.expanded_control = if self.expanded_control.as_deref() == Some(&id) { None } else { Some(id) };
+                scroll_to = self.expanded_control.clone();
             }
             widgets::hint(ui, "Touch a control on your device to see it light up. Click one to edit it below.");
             ui.add_space(10.0);
@@ -103,10 +105,8 @@ impl App {
                             self.expanded_control.as_deref() == Some(id.as_str())
                                 || learn.as_ref().is_some_and(|l| &l.control_id == id)
                         });
-                    let header = egui::CollapsingHeader::new(
-                        RichText::new(format!("{title}  ·  {}", shown.len())).font(semibold(13.5)),
-                    )
-                    .id_salt(("section", title.as_str()));
+                    let header = egui::CollapsingHeader::new(section_title(&title, shown.len(), &p))
+                        .id_salt(("section", title.as_str()));
                     let header = if force_open { header.open(Some(true)) } else { header };
                     header.show(ui, |ui| {
                         for id in &shown {
@@ -123,7 +123,7 @@ impl App {
                             } else {
                                 Stroke::new(1.0, pal().border)
                             };
-                            egui::Frame::new()
+                            let frame = egui::Frame::new()
                                 .fill(pal().inset)
                                 .stroke(stroke)
                                 .corner_radius(6)
@@ -169,6 +169,9 @@ impl App {
                                         edit_control(ui, id, c);
                                     }
                                 });
+                            if scroll_to.as_deref() == Some(id.as_str()) {
+                                frame.response.scroll_to_me(Some(egui::Align::Center));
+                            }
                         }
                     });
                 }
@@ -187,8 +190,10 @@ impl App {
                 });
                 let controls = p.controls.clone();
                 let mut remove_group = None;
+                let current = p.current().clone();
                 for (gid, g) in p.groups.iter_mut() {
-                    egui::CollapsingHeader::new(RichText::new(&g.name).font(semibold(14.0))).id_salt(gid).show(ui, |ui| {
+                    let title = group_title(g, current.get(gid.as_str()));
+                    egui::CollapsingHeader::new(title).id_salt(gid.as_str()).show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Name");
                             ui.text_edit_singleline(&mut g.name);
@@ -255,6 +260,57 @@ fn control_sections(p: &crate::profile::Profile) -> Vec<(String, Vec<String>)> {
         sections.push(("Other controls".into(), other));
     }
     sections
+}
+
+/// "Channel 1 · 5   Knob → Spotify   Fader → Discord": what the channel's
+/// groups control in the current bank.
+fn section_title(title: &str, count: usize, p: &crate::profile::Profile) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let fmt = |font: egui::FontId, color| egui::TextFormat { font_id: font, color, ..Default::default() };
+    job.append(title, 0.0, fmt(semibold(13.5), pal().text));
+    job.append(&format!("  ·  {count}"), 0.0, fmt(egui::FontId::proportional(13.0), pal().text_faint));
+    if let Some(n) = title.strip_prefix("Channel ") {
+        for (gid, g) in &p.groups {
+            if g.name.rsplit(' ').next() != Some(n) {
+                continue;
+            }
+            let kind = g.name.rsplit_once(' ').map_or(g.name.as_str(), |(k, _)| k);
+            let targets = assigned_summary(p.current().get(gid));
+            job.append(&format!("{kind} → "), 18.0, fmt(egui::FontId::proportional(12.5), pal().text_dim));
+            let color = if targets.is_empty() { pal().text_faint } else { pal().accent };
+            let text = if targets.is_empty() { "nothing".to_string() } else { targets };
+            job.append(&text, 0.0, fmt(egui::FontId::proportional(12.5), color));
+        }
+    }
+    job
+}
+
+/// Group name, which roles it has, and what it controls.
+fn group_title(g: &Group, a: Option<&crate::profile::GroupSettings>) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let fmt = |font: egui::FontId, color| egui::TextFormat { font_id: font, color, ..Default::default() };
+    job.append(&g.name, 0.0, fmt(semibold(14.0), pal().text));
+    let roles: Vec<&str> =
+        [(Role::Faders, "volume"), (Role::Mute, "mute"), (Role::Assign, "assign"), (Role::Run, "run")]
+            .into_iter()
+            .filter(|(r, _)| !g.role(*r).is_empty())
+            .map(|(_, l)| l)
+            .collect();
+    let roles = if roles.is_empty() { "no controls".to_string() } else { roles.join(", ") };
+    job.append(&roles, 14.0, fmt(egui::FontId::proportional(12.5), pal().text_dim));
+    let targets = assigned_summary(a);
+    if !targets.is_empty() {
+        job.append(&format!("→ {targets}"), 14.0, fmt(egui::FontId::proportional(12.5), pal().accent));
+    }
+    job
+}
+
+fn assigned_summary(a: Option<&crate::profile::GroupSettings>) -> String {
+    let Some(a) = a else { return String::new() };
+    if let Some(l) = &a.label {
+        return l.clone();
+    }
+    a.targets.iter().map(|t| t.label()).collect::<Vec<_>>().join(", ")
 }
 
 fn message_summary(c: &Control) -> String {
