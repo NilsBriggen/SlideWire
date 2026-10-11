@@ -1,3 +1,9 @@
 /target
 *.png
 !assets/**/*.png
+
+# makepkg output
+/packaging/aur/pkg/
+/packaging/aur/src/
+/packaging/aur/slidewire/
+/packaging/aur/*.pkg.tar.*
