@@ -34,6 +34,9 @@ pub struct Settings {
     pub accent: Accent,
     /// Skip UI animations.
     pub reduce_motion: bool,
+    /// obs-websocket address and password, for OBS button actions.
+    pub obs_url: String,
+    pub obs_password: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -91,6 +94,8 @@ impl Default for Settings {
             theme: ThemeMode::System,
             accent: Accent::Cyan,
             reduce_motion: false,
+            obs_url: "ws://localhost:4455".into(),
+            obs_password: String::new(),
         }
     }
 }

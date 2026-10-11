@@ -235,6 +235,8 @@ impl App {
                     self.toast(icon::FOLDER_SIMPLE, format!("Switched to \"{p}\""), None, None)
                 }
                 Notice::Bank(b) => self.toast(icon::STACK, format!("Bank {}", b + 1), None, None),
+                Notice::Info(t) => self.toast(icon::INFO, t, None, None),
+                Notice::Problem(t) => self.toast(icon::WARNING, t, Some(ASSIGN), None),
                 Notice::SceneRecalled(name) => self.toast(
                     icon::BOOKMARKS_SIMPLE,
                     format!("Scene \"{name}\" recalled"),
@@ -266,11 +268,17 @@ impl App {
                     ui.scope(|ui| {
                         ui.multiply_opacity(fade);
                         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
-                            ui.set_max_width(360.0);
+                            ui.set_max_width(380.0);
                             ui.horizontal(|ui| {
                                 let color = t.color.unwrap_or(pal().accent);
                                 ui.label(RichText::new(t.icon).size(18.0).color(color));
-                                ui.label(&t.text);
+                                // Leave room for the buttons; long messages wrap.
+                                let room =
+                                    (ui.available_width() - if t.undo.is_some() { 90.0 } else { 34.0 }).max(120.0);
+                                ui.scope(|ui| {
+                                    ui.set_max_width(room);
+                                    ui.add(egui::Label::new(&t.text).wrap());
+                                });
                                 if let Some(u) = t.undo
                                     && ui.button(RichText::new("Undo").color(pal().accent)).clicked()
                                 {

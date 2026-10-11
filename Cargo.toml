@@ -7,6 +7,7 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 anyhow = "1.0.104"
+base64 = "0.22.1"
 crossbeam-channel = "0.5.17"
 directories = "6.0.0"
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "wayland", "x11", "default_fonts", "accesskit"] }
@@ -22,5 +23,7 @@ midir = "0.11.1"
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
+sha2 = "0.11.0"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 ulid = "3.0.0"
 zbus = { version = "5.19.0", default-features = false, features = ["blocking-api", "async-io"] }

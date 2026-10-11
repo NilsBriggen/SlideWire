@@ -64,6 +64,8 @@ pub enum Event {
     ShowWindow,
     /// A sound device was plugged in or out.
     DevicesChanged,
+    /// Show this in the window (from a background task).
+    Notice(Notice),
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +161,8 @@ pub enum Notice {
     Bank(usize),
     /// A scene was recalled; it can be undone.
     SceneRecalled(String),
+    Info(String),
+    Problem(String),
 }
 
 impl Shared {
@@ -351,6 +355,7 @@ impl Engine {
                 let _ = self.show_window.send(());
             }
             Event::Ui(cmd) => self.on_ui(cmd),
+            Event::Notice(n) => self.shared.lock().unwrap().notify(n),
             Event::DevicesChanged => {
                 let now = Instant::now();
                 self.rescan_at = Some(now + Duration::from_millis(250));
@@ -650,6 +655,21 @@ impl Engine {
             }
             ButtonAction::PushToTalk => self.mute_default_input(false),
             ButtonAction::PushToMute => self.mute_default_input(true),
+            ButtonAction::Obs { op } => {
+                let op = op.clone();
+                let (url, password) = {
+                    let s = &self.shared.lock().unwrap().store.settings;
+                    (s.obs_url.clone(), s.obs_password.clone())
+                };
+                let shared = self.shared.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = crate::obs::run(&url, &password, &op) {
+                        let mut sh = shared.lock().unwrap();
+                        sh.warn(format!("{e:#}"));
+                        sh.notify(Notice::Problem(e.to_string()));
+                    }
+                });
+            }
         }
     }
 

@@ -12,6 +12,7 @@ mod focus;
 mod icon;
 mod mapping;
 mod midi;
+mod obs;
 mod portal;
 mod profile;
 mod tray;

@@ -396,6 +396,10 @@ pub enum ButtonAction {
     PushToTalk,
     /// The default input is muted only while the button is held.
     PushToMute,
+    /// Switch scene, mute a source, or start/stop recording or streaming in OBS.
+    Obs {
+        op: crate::obs::ObsOp,
+    },
 }
 
 impl ButtonAction {
@@ -414,6 +418,7 @@ impl ButtonAction {
             ButtonAction::MuteInputs => "Mute all inputs",
             ButtonAction::PushToTalk => "Push to talk",
             ButtonAction::PushToMute => "Push to mute",
+            ButtonAction::Obs { .. } => "OBS Studio",
         }
     }
 }

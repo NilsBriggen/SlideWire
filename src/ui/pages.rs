@@ -320,6 +320,8 @@ impl App {
                     volume_card(&mut cols[0], &mut s);
                     midi_card(&mut cols[1], &mut s, &ports_out);
                     cols[1].add_space(10.0);
+                    obs_card(&mut cols[1], &mut s, &self.events);
+                    cols[1].add_space(10.0);
                     self.nano_card(&mut cols[1]);
                     cols[1].add_space(10.0);
                     self.about_card(&mut cols[1]);
@@ -333,6 +335,8 @@ impl App {
                 volume_card(ui, &mut s);
                 ui.add_space(10.0);
                 midi_card(ui, &mut s, &ports_out);
+                ui.add_space(10.0);
+                obs_card(ui, &mut s, &self.events);
                 ui.add_space(10.0);
                 self.nano_card(ui);
                 ui.add_space(10.0);
@@ -515,6 +519,7 @@ fn action_editor(
         ButtonAction::MuteInputs,
         ButtonAction::PushToTalk,
         ButtonAction::PushToMute,
+        ButtonAction::Obs { op: crate::obs::ObsOp::ToggleRecord },
     ];
     egui::ComboBox::from_id_salt(("action", cid)).selected_text(action.label()).width(240.0).show_ui(ui, |ui| {
         for k in kinds {
@@ -642,6 +647,65 @@ fn action_editor(
         ButtonAction::PushToMute => {
             widgets::hint(ui, "The default microphone is muted while you hold the button.");
         }
+        ButtonAction::Obs { op } => {
+            use crate::obs::ObsOp;
+            ui.horizontal(|ui| {
+                for (o, l) in [
+                    (ObsOp::Scene { name: String::new() }, "Switch scene"),
+                    (ObsOp::ToggleMute { input: String::new() }, "Mute a source"),
+                    (ObsOp::ToggleRecord, "Record"),
+                    (ObsOp::ToggleStream, "Stream"),
+                ] {
+                    let same = std::mem::discriminant(&o) == std::mem::discriminant(op);
+                    if ui.selectable_label(same, l).clicked() && !same {
+                        *op = o;
+                    }
+                }
+            });
+            match op {
+                ObsOp::Scene { name } => {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(name)
+                                .hint_text("Scene name, exactly as in OBS")
+                                .desired_width(240.0),
+                        );
+                        let r = ui.small_button(icon::CARET_DOWN).on_hover_text("Scenes in OBS");
+                        if r.clicked() {
+                            fetch_obs_scenes(ui.ctx());
+                        }
+                        egui::Popup::menu(&r).show(|ui| match &*OBS_SCENES.lock().unwrap() {
+                            None => {
+                                widgets::hint(ui, "Asking OBS…");
+                            }
+                            Some(Err(e)) => {
+                                widgets::hint(ui, e);
+                            }
+                            Some(Ok(list)) => {
+                                for scene in list {
+                                    if ui.button(scene).clicked() {
+                                        *name = scene.clone();
+                                        ui.close();
+                                    }
+                                }
+                            }
+                        });
+                    });
+                }
+                ObsOp::ToggleMute { input } => {
+                    ui.add(
+                        egui::TextEdit::singleline(input).hint_text("Source name, e.g. Mic/Aux").desired_width(240.0),
+                    );
+                }
+                ObsOp::ToggleRecord => {
+                    widgets::hint(ui, "Starts recording, or stops it.");
+                }
+                ObsOp::ToggleStream => {
+                    widgets::hint(ui, "Starts streaming, or stops it.");
+                }
+            }
+            widgets::hint(ui, "Set OBS's address and password under Settings.");
+        }
         ButtonAction::Profile { id } => {
             let current =
                 profiles.iter().find(|(pid, _)| pid == id).map(|(_, n)| n.clone()).unwrap_or_else(|| "Pick…".into());
@@ -752,6 +816,53 @@ fn volume_card(ui: &mut egui::Ui, s: &mut Settings) {
             ui,
             "Stops jumps when a volume was changed elsewhere. The mixer shows where your fader is in amber.",
         );
+    });
+}
+
+/// OBS's scene list, fetched in the background for the scene picker.
+static OBS_SCENES: std::sync::Mutex<Option<Result<Vec<String>, String>>> = std::sync::Mutex::new(None);
+
+fn fetch_obs_scenes(ctx: &egui::Context) {
+    *OBS_SCENES.lock().unwrap() = None;
+    let ctx = ctx.clone();
+    let (url, password) = crate::dbus::SHARED
+        .get()
+        .map(|sh| {
+            let s = &sh.lock().unwrap().store.settings;
+            (s.obs_url.clone(), s.obs_password.clone())
+        })
+        .unwrap_or_default();
+    std::thread::spawn(move || {
+        let result = crate::obs::scenes(&url, &password).map_err(|e| format!("{e:#}"));
+        *OBS_SCENES.lock().unwrap() = Some(result);
+        ctx.request_repaint();
+    });
+}
+
+/// obs-websocket connection for OBS button actions.
+fn obs_card(ui: &mut egui::Ui, s: &mut Settings, events: &crossbeam_channel::Sender<crate::engine::Event>) {
+    widgets::card(ui, icon::VIDEO_CAMERA, "OBS Studio", |ui| {
+        widgets::hint(ui, "For OBS buttons. In OBS: Tools → WebSocket Server Settings.");
+        egui::Grid::new("obs").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            ui.label("Address");
+            ui.add(egui::TextEdit::singleline(&mut s.obs_url).desired_width(220.0));
+            ui.end_row();
+            ui.label("Password");
+            ui.add(egui::TextEdit::singleline(&mut s.obs_password).password(true).desired_width(220.0));
+            ui.end_row();
+        });
+        ui.horizontal(|ui| {
+            if ui.button(format!("{}  Test connection", icon::PLUGS_CONNECTED)).clicked() {
+                let (url, password, events) = (s.obs_url.clone(), s.obs_password.clone(), events.clone());
+                std::thread::spawn(move || {
+                    let n = match crate::obs::check(&url, &password) {
+                        Ok(v) => crate::engine::Notice::Info(format!("Connected to OBS {v}")),
+                        Err(e) => crate::engine::Notice::Problem(e.to_string()),
+                    };
+                    let _ = events.send(crate::engine::Event::Notice(n));
+                });
+            }
+        });
     });
 }
 
