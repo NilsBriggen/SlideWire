@@ -1117,7 +1117,7 @@ fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
                     continue;
                 }
                 let c = theme::accent_color(a, system);
-                if widgets::swatch(ui, c, s.accent == a, a.label()).clicked() {
+                if widgets::swatch(ui, c, s.accent == a, &a.label()).clicked() {
                     s.accent = a;
                 }
             }

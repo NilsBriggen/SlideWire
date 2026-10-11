@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
 use crate::profile::Profile;
@@ -78,14 +79,14 @@ impl Accent {
     pub const ALL: [Accent; 6] =
         [Accent::Cyan, Accent::Violet, Accent::Green, Accent::Amber, Accent::Pink, Accent::System];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Accent::Cyan => "Cyan",
-            Accent::Violet => "Violet",
-            Accent::Green => "Green",
-            Accent::Amber => "Amber",
-            Accent::Pink => "Pink",
-            Accent::System => "Desktop",
+            Accent::Cyan => t!("Cyan").into(),
+            Accent::Violet => t!("Violet").into(),
+            Accent::Green => t!("Green").into(),
+            Accent::Amber => t!("Amber").into(),
+            Accent::Pink => t!("Pink").into(),
+            Accent::System => t!("Desktop").into(),
         }
     }
 }

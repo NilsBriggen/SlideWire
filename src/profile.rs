@@ -9,6 +9,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -25,11 +26,11 @@ pub enum ControlKind {
 
 impl ControlKind {
     pub const ALL: [ControlKind; 3] = [ControlKind::Fader, ControlKind::Button, ControlKind::Output];
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            ControlKind::Fader => "Fader / knob",
-            ControlKind::Button => "Button",
-            ControlKind::Output => "Output (LED)",
+            ControlKind::Fader => t!("Fader / knob").into(),
+            ControlKind::Button => t!("Button").into(),
+            ControlKind::Output => t!("Output (LED)").into(),
         }
     }
 }
@@ -198,17 +199,17 @@ impl Role {
         Role::RunIndicators,
         Role::Meters,
     ];
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Role::Faders => "Volume",
-            Role::Indicators => "Volume indicator",
-            Role::Mute => "Mute",
-            Role::MuteIndicators => "Mute indicator",
-            Role::Assign => "Assign",
-            Role::AssignIndicators => "Assign indicator",
-            Role::Run => "Run / default",
-            Role::RunIndicators => "Run indicator",
-            Role::Meters => "Peak meter",
+            Role::Faders => t!("Volume").into(),
+            Role::Indicators => t!("Volume indicator").into(),
+            Role::Mute => t!("Mute").into(),
+            Role::MuteIndicators => t!("Mute indicator").into(),
+            Role::Assign => t!("Assign").into(),
+            Role::AssignIndicators => t!("Assign indicator").into(),
+            Role::Run => t!("Run / default").into(),
+            Role::RunIndicators => t!("Run indicator").into(),
+            Role::Meters => t!("Peak meter").into(),
         }
     }
     /// Which control kind is expected for this role.
@@ -324,15 +325,15 @@ pub enum Target {
 impl Target {
     pub fn label(&self) -> String {
         match self {
-            Target::Focus => "Focused app".into(),
+            Target::Focus => t!("Focused app").into(),
             Target::App { label, .. } => label.clone(),
             Target::AppInput { label, .. } => format!("{label} (recording)"),
-            Target::Unassigned => "All other apps".into(),
-            Target::EventSounds => "System sounds".into(),
+            Target::Unassigned => t!("All other apps").into(),
+            Target::EventSounds => t!("System sounds").into(),
             Target::Output { label, .. } => label.clone(),
             Target::Input { label, .. } => label.clone(),
-            Target::DefaultOutput => "Default output".into(),
-            Target::DefaultInput => "Default input".into(),
+            Target::DefaultOutput => t!("Default output").into(),
+            Target::DefaultInput => t!("Default input").into(),
         }
     }
 }
@@ -415,24 +416,24 @@ pub enum ButtonAction {
 }
 
 impl ButtonAction {
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            ButtonAction::None => "Nothing",
-            ButtonAction::Mute { .. } => "Toggle mute",
-            ButtonAction::Media { .. } => "Media key",
-            ButtonAction::Command { .. } => "Run command",
-            ButtonAction::Keys { .. } => "Key combination",
-            ButtonAction::DefaultOutput { .. } => "Set/cycle default output",
-            ButtonAction::DefaultInput { .. } => "Set/cycle default input",
-            ButtonAction::Profile { .. } => "Switch profile",
-            ButtonAction::Bank { .. } => "Previous/next bank",
-            ButtonAction::Scene { .. } => "Recall scene",
-            ButtonAction::MuteInputs => "Mute all inputs",
-            ButtonAction::PushToTalk => "Push to talk",
-            ButtonAction::PushToMute => "Push to mute",
-            ButtonAction::Obs { .. } => "OBS Studio",
-            ButtonAction::Monitor { .. } => "Hear yourself (monitor)",
-            ButtonAction::EasyEffects { .. } => "EasyEffects preset",
+            ButtonAction::None => t!("Nothing").into(),
+            ButtonAction::Mute { .. } => t!("Toggle mute").into(),
+            ButtonAction::Media { .. } => t!("Media key").into(),
+            ButtonAction::Command { .. } => t!("Run command").into(),
+            ButtonAction::Keys { .. } => t!("Key combination").into(),
+            ButtonAction::DefaultOutput { .. } => t!("Set/cycle default output").into(),
+            ButtonAction::DefaultInput { .. } => t!("Set/cycle default input").into(),
+            ButtonAction::Profile { .. } => t!("Switch profile").into(),
+            ButtonAction::Bank { .. } => t!("Previous/next bank").into(),
+            ButtonAction::Scene { .. } => t!("Recall scene").into(),
+            ButtonAction::MuteInputs => t!("Mute all inputs").into(),
+            ButtonAction::PushToTalk => t!("Push to talk").into(),
+            ButtonAction::PushToMute => t!("Push to mute").into(),
+            ButtonAction::Obs { .. } => t!("OBS Studio").into(),
+            ButtonAction::Monitor { .. } => t!("Hear yourself (monitor)").into(),
+            ButtonAction::EasyEffects { .. } => t!("EasyEffects preset").into(),
         }
     }
 }
