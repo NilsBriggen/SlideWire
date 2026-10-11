@@ -1,0 +1,31 @@
+#compdef slidewire
+
+_slidewire() {
+    local -a commands
+    commands=(
+        'strips:list strips with volume and assignment'
+        'set:set or change a strip'"'"'s volume'
+        'mute:mute or unmute a strip'
+        'bank:switch to a bank'
+        'scene:recall a scene'
+    )
+    if (( CURRENT == 2 )); then
+        _describe 'command' commands
+        _arguments \
+            '--minimized[start in the tray]' \
+            '--list-ports[list MIDI ports]' \
+            '--monitor[print incoming MIDI]:pattern:' \
+            '--doctor[check why a controller does not show up]:pattern:' \
+            '--install-icon[install a menu entry and icons]' \
+            '--uninstall[remove the menu entry, icons and autostart]' \
+            '--write-icons[write theme icons]:directory:_files -/' \
+            '(-V --version)'{-V,--version}'[print the version]' \
+            '(-h --help)'{-h,--help}'[show help]'
+        return
+    fi
+    case $words[2] in
+        mute) (( CURRENT == 4 )) && _values 'mode' on off toggle ;;
+    esac
+}
+
+_slidewire "$@"

@@ -14,6 +14,8 @@ optdepends=(
   'libxcursor: X11 session support'
   'libxi: X11 session support'
   'libxrandr: X11 session support'
+  'easyeffects: EasyEffects preset buttons'
+  'ydotool: key-combination buttons'
 )
 provides=("$_pkgname")
 conflicts=("$_pkgname")
@@ -48,9 +50,5 @@ check() {
 
 package() {
   cd "$_pkgname"
-  install -Dm755 target/release/slidewire "$pkgdir/usr/bin/slidewire"
-  install -Dm644 packaging/dev.briggen.Slidewire.desktop "$pkgdir/usr/share/applications/dev.briggen.Slidewire.desktop"
-  target/release/slidewire --write-icons "$pkgdir/usr/share/icons"
-  install -Dm644 packaging/slidewire.service "$pkgdir/usr/lib/systemd/user/slidewire.service"
-  install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
+  scripts/install.sh "$pkgdir"
 }

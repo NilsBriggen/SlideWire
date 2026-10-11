@@ -1,0 +1,89 @@
+.TH SLIDEWIRE 1 "2026-10-11" "Slidewire 1.0.0" "User Commands"
+.SH NAME
+slidewire \- control app and device volumes with a MIDI controller
+.SH SYNOPSIS
+.B slidewire
+.RI [ OPTIONS ]
+.br
+.B slidewire
+.I COMMAND
+.RI [ ARGS ]
+.SH DESCRIPTION
+Slidewire turns a MIDI controller into a volume mixer: faders set the volume of
+apps and audio devices, buttons mute and switch them, and the controller's LEDs
+show the state. It works with PipeWire and PulseAudio.
+.PP
+Started without a command it opens its window, or brings up the window of the
+copy that is already running.
+.SH OPTIONS
+.TP
+.B \-\-minimized
+Start in the tray without opening the window.
+.TP
+.B \-\-list\-ports
+List MIDI ports and exit.
+.TP
+.BR \-\-monitor " [\fIPATTERN\fR]"
+Print incoming MIDI messages, from ports whose name contains \fIPATTERN\fR.
+.TP
+.BR \-\-doctor " [\fIPATTERN\fR]"
+Check why a controller doesn't show up: USB, sound driver, ALSA sequencer,
+kernel updates, and whether Slidewire could open it. Default: nanoKONTROL2.
+.TP
+.B \-\-install\-icon
+Install a menu entry and icons for the current user (for builds without a package).
+.TP
+.B \-\-uninstall
+Remove what \fB\-\-install\-icon\fR and autostart added. Settings are kept.
+.TP
+.BR \-\-write\-icons " \fIDIR\fR"
+Write the app icons for the hicolor theme under \fIDIR\fR (for packaging).
+.TP
+.BR \-V ", " \-\-version
+Print the version.
+.TP
+.BR \-h ", " \-\-help
+Show a short help.
+.SH COMMANDS
+These control the running app, for scripts and keyboard shortcuts.
+\fISTRIP\fR is a strip name such as "Knob 3", or a number for that fader.
+.TP
+.B strips
+List the strips with their volume and what they control.
+.TP
+.BR set " \fISTRIP\fR \fIPERCENT\fR|+\fIN\fR|\-\fIN\fR"
+Set a strip's volume, or change it by \fIN\fR percent.
+.TP
+.BR mute " \fISTRIP\fR [on|off|toggle]"
+Mute or unmute a strip. Default: toggle.
+.TP
+.BR bank " \fIN\fR"
+Switch to bank \fIN\fR (1 is the first).
+.TP
+.BR scene " \fINAME\fR"
+Recall a saved scene.
+.SH FILES
+.TP
+.I ~/.config/slidewire/settings.json
+Settings. The previous version is kept as \fIsettings.json.bak\fR.
+.TP
+.I ~/.config/slidewire/profiles/*.json
+Controller profiles, in the format of MIDI Mixer for Windows plus Slidewire's own fields.
+.TP
+.I ~/.local/state/slidewire/crash.log
+Reports of crashes.
+.SH ENVIRONMENT
+.TP
+.B SLIDEWIRE_CONFIG
+Use another configuration directory.
+.SH EXAMPLES
+.nf
+slidewire set 1 +5          # fader 1 up by 5%
+slidewire mute "Knob 2"     # toggle mute on knob 2
+slidewire scene Gaming      # recall the scene "Gaming"
+.fi
+.SH SEE ALSO
+.BR pactl (1),
+.BR aconnect (1)
+.PP
+https://git.briggen.dev/NilsBriggen/SlideWire

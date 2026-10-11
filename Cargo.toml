@@ -2,8 +2,16 @@
 name = "slidewire"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 description = "Control app and device volumes with a MIDI controller"
 license = "GPL-3.0-or-later"
+authors = ["Nils Briggen <nilsbriggen@gmail.com>"]
+repository = "https://git.briggen.dev/NilsBriggen/SlideWire"
+homepage = "https://git.briggen.dev/NilsBriggen/SlideWire"
+readme = "README.md"
+keywords = ["midi", "volume", "mixer", "pipewire", "pulseaudio"]
+categories = ["multimedia::audio", "gui"]
+exclude = ["packaging/aur/*.pkg.tar.zst", "packaging/aur/src", "packaging/aur/pkg"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -29,3 +37,8 @@ sha2 = "0.11.0"
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 ulid = "3.0.0"
 zbus = { version = "5.19.0", default-features = false, features = ["blocking-api", "async-io"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

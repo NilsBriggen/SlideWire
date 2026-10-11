@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.briggen.Slidewire</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Slidewire</name>
+  <summary>Control app and device volumes with a MIDI controller</summary>
+  <developer id="dev.briggen">
+    <name>Nils Briggen</name>
+  </developer>
+  <description>
+    <p>
+      Slidewire turns a MIDI controller such as the Korg nanoKONTROL2 into a volume mixer for your desktop.
+      Faders set the volume of apps and audio devices, buttons mute and switch them, and the LEDs show what's happening.
+    </p>
+    <ul>
+      <li>Faders for the focused app, specific apps, "all other apps", or any device</li>
+      <li>Banks and scenes, soft takeover, per-strip range, curve, name and colour</li>
+      <li>Buses that mix apps together, ducking, and remembered output per app</li>
+      <li>Buttons for media keys, OBS Studio, EasyEffects, push-to-talk and more</li>
+      <li>Imports MIDI Mixer for Windows profiles, so its presets for many controllers work</li>
+      <li>Works with PipeWire and PulseAudio, on KDE Plasma, Hyprland, sway and other desktops</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">dev.briggen.Slidewire.desktop</launchable>
+  <url type="homepage">https://git.briggen.dev/NilsBriggen/SlideWire</url>
+  <url type="bugtracker">https://git.briggen.dev/NilsBriggen/SlideWire/issues</url>
+  <url type="vcs-browser">https://git.briggen.dev/NilsBriggen/SlideWire</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The mixer: one strip per hardware channel</caption>
+      <image>https://git.briggen.dev/NilsBriggen/SlideWire/raw/branch/main/assets/screenshots/mixer.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The controller, drawn live</caption>
+      <image>https://git.briggen.dev/NilsBriggen/SlideWire/raw/branch/main/assets/screenshots/controller.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Light theme</caption>
+      <image>https://git.briggen.dev/NilsBriggen/SlideWire/raw/branch/main/assets/screenshots/mixer-light.png</image>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Mixer</category>
+  </categories>
+  <keywords>
+    <keyword>midi</keyword>
+    <keyword>volume</keyword>
+    <keyword>mixer</keyword>
+    <keyword>fader</keyword>
+    <keyword>nanokontrol</keyword>
+  </keywords>
+  <provides>
+    <binary>slidewire</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0" date="2026-10-11">
+      <description>
+        <p>The first release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

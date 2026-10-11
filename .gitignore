@@ -7,3 +7,5 @@
 /packaging/aur/src/
 /packaging/aur/slidewire/
 /packaging/aur/*.pkg.tar.*
+/dist
+/.claude/
