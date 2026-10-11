@@ -355,7 +355,7 @@ impl App {
             }
             widgets::toggle(ui, &mut s.start_minimized, "Start minimised to the tray");
             widgets::toggle(ui, &mut s.auto_switch, "Switch to the matching profile when a controller is plugged in");
-            widgets::toggle(ui, &mut s.osd, "Show the Plasma volume pop-up when a fader moves");
+            widgets::toggle(ui, &mut s.osd, "Show a volume pop-up when a fader moves");
         });
     }
 

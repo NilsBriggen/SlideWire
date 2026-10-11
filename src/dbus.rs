@@ -349,9 +349,44 @@ pub struct Osd {
     tx: Sender<(String, i32, String)>,
 }
 
+fn has_owner(conn: &Connection, name: &str) -> bool {
+    zbus::blocking::fdo::DBusProxy::new(conn)
+        .ok()
+        .and_then(|p| p.name_has_owner(name.try_into().ok()?).ok())
+        .unwrap_or(false)
+}
+
+/// A volume pop-up as a desktop notification (GNOME, dunst, mako, ...).
+/// The "value" hint draws a bar where supported; `replaces` keeps it to one
+/// notification. Returns its id.
+fn notify(conn: &Connection, replaces: u32, icon: &str, percent: i32, text: &str) -> Option<u32> {
+    use std::collections::HashMap;
+    use zbus::zvariant::Value;
+    let mut hints: HashMap<&str, Value> = HashMap::new();
+    hints.insert("transient", Value::Bool(true));
+    hints.insert("x-canonical-private-synchronous", Value::from("slidewire"));
+    let summary = if percent >= 0 {
+        hints.insert("value", Value::I32(percent.clamp(0, 100)));
+        format!("{percent}%")
+    } else {
+        text.to_string()
+    };
+    let body = if percent >= 0 { text } else { "" };
+    let reply = conn
+        .call_method(
+            Some("org.freedesktop.Notifications"),
+            "/org/freedesktop/Notifications",
+            Some("org.freedesktop.Notifications"),
+            "Notify",
+            &("Slidewire", replaces, icon, summary.as_str(), body, Vec::<&str>::new(), hints, 1500i32),
+        )
+        .ok()?;
+    reply.body().deserialize::<u32>().ok()
+}
+
 impl Osd {
-    /// Plasma's volume OSD. Requests are coalesced so fast fader moves don't
-    /// queue up.
+    /// Plasma's volume OSD, or a notification on other desktops. Requests
+    /// are coalesced so fast fader moves don't queue up.
     pub fn spawn() -> Osd {
         let (tx, rx) = crossbeam_channel::unbounded::<(String, i32, String)>();
         std::thread::Builder::new()
@@ -363,28 +398,35 @@ impl Osd {
                     return;
                 }
                 let Ok(conn) = Connection::session() else { return };
+                let plasma = has_owner(&conn, "org.kde.plasmashell");
+                // Elsewhere: a desktop notification that replaces itself.
+                let mut note_id = 0u32;
                 while let Ok(mut req) = rx.recv() {
                     while let Ok(newer) = rx.try_recv() {
                         req = newer;
                     }
                     let (icon, percent, text) = req;
-                    let _ = if percent < 0 {
-                        conn.call_method(
-                            Some("org.kde.plasmashell"),
-                            "/org/kde/osdService",
-                            Some("org.kde.osdService"),
-                            "showText",
-                            &(icon, text),
-                        )
-                    } else {
-                        conn.call_method(
-                            Some("org.kde.plasmashell"),
-                            "/org/kde/osdService",
-                            Some("org.kde.osdService"),
-                            "showProgress",
-                            &(icon, percent, 100i32, text),
-                        )
-                    };
+                    if plasma {
+                        let _ = if percent < 0 {
+                            conn.call_method(
+                                Some("org.kde.plasmashell"),
+                                "/org/kde/osdService",
+                                Some("org.kde.osdService"),
+                                "showText",
+                                &(icon, text),
+                            )
+                        } else {
+                            conn.call_method(
+                                Some("org.kde.plasmashell"),
+                                "/org/kde/osdService",
+                                Some("org.kde.osdService"),
+                                "showProgress",
+                                &(icon, percent, 100i32, text),
+                            )
+                        };
+                    } else if let Some(id) = notify(&conn, note_id, &icon, percent, &text) {
+                        note_id = id;
+                    }
                     std::thread::sleep(Duration::from_millis(30));
                 }
             })

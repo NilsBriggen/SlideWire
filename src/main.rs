@@ -8,6 +8,7 @@ mod config;
 mod dbus;
 mod doctor;
 mod engine;
+mod focus;
 mod icon;
 mod mapping;
 mod midi;
@@ -159,7 +160,11 @@ fn main() {
     let _ = dbus::SHARED.set(shared.clone());
 
     let test_instance = crate::config::env("INSTANCE").is_some();
-    if let Some(conn) = bus.as_ref().filter(|_| !test_instance)
+    // Focus tracking: Hyprland or sway directly, otherwise a KWin script.
+    let compositor = if test_instance { None } else { focus::spawn(tx.clone()) };
+    if let Some(name) = compositor {
+        shared.lock().unwrap().log(format!("Following the focused window on {name}"));
+    } else if let Some(conn) = bus.as_ref().filter(|_| !test_instance)
         && let Err(e) = dbus::install_focus_script(conn)
     {
         shared.lock().unwrap().warn(format!("Focus tracking unavailable: {e:#}"));
