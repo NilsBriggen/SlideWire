@@ -191,7 +191,7 @@ fn main() {
         let handle = handle.clone();
         std::thread::spawn(move || {
             loop {
-                std::thread::sleep(Duration::from_secs(2));
+                std::thread::sleep(Duration::from_secs(1));
                 if handle.update(|_| {}).is_none() {
                     break;
                 }

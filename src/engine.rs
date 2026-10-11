@@ -50,6 +50,10 @@ pub enum UiCmd {
     RecallScene(String),
     /// Go back to how things were before the last scene recall.
     UndoScene,
+    /// Mute or unmute the default microphone.
+    ToggleMicMute,
+    /// Change the default output's volume by this much (tray scroll wheel).
+    NudgeOutput(f32),
 }
 
 pub enum Event {
@@ -886,6 +890,30 @@ impl Engine {
             UiCmd::MoveStream(kind, index, device) => self.audio.send(AudioCmd::Move(kind, index, device)),
             UiCmd::SaveScene(name) => self.save_scene(&name),
             UiCmd::RecallScene(name) => self.recall_scene(&name),
+            UiCmd::ToggleMicMute => {
+                let muted = {
+                    let sh = self.shared.lock().unwrap();
+                    sh.audio.sources.iter().find(|d| d.name == sh.audio.default_source).map(|d| d.mute)
+                };
+                if let Some(m) = muted {
+                    self.mute_default_input(!m);
+                }
+            }
+            UiCmd::NudgeOutput(delta) => {
+                let (sink, max) = {
+                    let sh = self.shared.lock().unwrap();
+                    let max = if sh.store.settings.allow_boost { 1.5 } else { 1.0 };
+                    (sh.audio.sinks.iter().find(|d| d.name == sh.audio.default_sink).map(|d| (d.index, d.volume)), max)
+                };
+                if let Some((index, vol)) = sink {
+                    let v = (vol + delta).clamp(0.0, max);
+                    self.audio.send(AudioCmd::SetVolume(Kind::Sink, index, v));
+                    self.optimistic(Kind::Sink, index, Some(v), None);
+                    if self.shared.lock().unwrap().store.settings.osd {
+                        self.osd.show("audio-volume-high", (v * 100.0).round() as i32, "");
+                    }
+                }
+            }
             UiCmd::UndoScene => {
                 if let Some(scene) = self.scene_undo.take() {
                     self.apply_scene(&scene);
