@@ -397,6 +397,37 @@ pub fn card<R>(ui: &mut Ui, icon: &str, title: &str, add_contents: impl FnOnce(&
         .inner
 }
 
+/// A [`card`] whose body folds away when its header is clicked. `count`
+/// shows next to the title; the open state is remembered.
+pub fn collapsible_card(ui: &mut Ui, icon: &str, title: &str, count: usize, add_contents: impl FnOnce(&mut Ui)) {
+    let id = ui.make_persistent_id(("card-open", title));
+    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, true));
+    card(ui, "", "", |ui| {
+        let header = ui
+            .horizontal(|ui| {
+                ui.label(egui::RichText::new(icon).size(17.0).color(pal().accent));
+                ui.label(egui::RichText::new(title).font(semibold(15.0)));
+                ui.label(egui::RichText::new(count.to_string()).size(12.0).color(pal().text_faint));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let t = theme::anim(ui.ctx(), id.with("caret"), if open { 1.0 } else { 0.0 }, 0.12);
+                    let caret = if t > 0.5 { theme::icon::CARET_UP } else { theme::icon::CARET_DOWN };
+                    ui.label(egui::RichText::new(caret).color(pal().text_dim));
+                });
+            })
+            .response;
+        let click =
+            ui.interact(header.rect, id.with("hdr"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if click.clicked() {
+            open = !open;
+            ui.data_mut(|d| d.insert_persisted(id, open));
+        }
+        if open {
+            ui.add_space(4.0);
+            add_contents(ui);
+        }
+    });
+}
+
 /// Small rounded status chip with an LED dot.
 pub fn pill(ui: &mut Ui, led: Option<Color32>, text: &str) -> Response {
     egui::Frame::new()

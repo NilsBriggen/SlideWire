@@ -53,6 +53,7 @@ pub struct App {
     expanded_control: Option<String>,
     control_search: String,
     scene_name: String,
+    source_filter: String,
     /// Strip being renamed in its menu: (group id, text).
     rename: Option<(String, String)>,
     /// Peak-hold per strip: (value, time it was set).
@@ -104,6 +105,7 @@ impl App {
             control_search: String::new(),
             scene_name: String::new(),
             rename: None,
+            source_filter: String::new(),
             meter_hold: HashMap::new(),
             show_sources: true,
             show_doctor: crate::config::env("TAB").as_deref() == Some("doctor"),

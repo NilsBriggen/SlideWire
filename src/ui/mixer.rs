@@ -308,7 +308,7 @@ impl App {
                     ui.add(egui::Label::new(RichText::new(title).font(semibold(13.5))).truncate());
                 }
                 let text = if !s.resolved.is_empty() {
-                    s.resolved.join(" + ")
+                    join_counted(&s.resolved)
                 } else if !s.targets.is_empty() {
                     s.targets.iter().map(|t| t.label()).collect::<Vec<_>>().join(" + ")
                 } else if dragging {
@@ -408,7 +408,10 @@ impl App {
         const SIZE: f32 = 34.0;
         let mut images: Vec<egui::Image> = match &s.icon {
             Some(i) => self.icons.image(std::slice::from_ref(i)).into_iter().collect(),
-            None => s.icons.iter().filter_map(|h| self.icons.image(h)).collect(),
+            None => {
+                let mut seen = HashSet::new();
+                s.icons.iter().filter(|h| seen.insert(*h)).filter_map(|h| self.icons.image(h)).collect()
+            }
         };
         if images.is_empty()
             && !s.targets.is_empty()
@@ -732,27 +735,50 @@ impl App {
         widgets::hint(ui, &format!("{}  Drag a row by its handle onto a strip to assign it.", icon::DOTS_SIX_VERTICAL));
         ui.add_space(6.0);
         let max = if boost { 1.5 } else { 1.0 };
+        let apps = group_streams(&audio.apps);
+        let inputs = group_streams(&audio.app_inputs);
+        let total = apps.len() + inputs.len() + audio.sinks.len() + audio.sources.len();
+        if total > 8 || !self.source_filter.is_empty() {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.source_filter)
+                    .hint_text(format!("{}  Filter", icon::MAGNIFYING_GLASS))
+                    .desired_width(f32::INFINITY),
+            );
+            ui.add_space(4.0);
+        }
+        let filter = self.source_filter.to_lowercase();
+        let shown = |name: &str, sub: &str| {
+            filter.is_empty() || name.to_lowercase().contains(&filter) || sub.to_lowercase().contains(&filter)
+        };
         egui::ScrollArea::vertical().id_salt("sources").auto_shrink([false, false]).show(ui, |ui| {
-            widgets::card(ui, icon::MUSIC_NOTES, "Applications", |ui| {
-                if audio.apps.is_empty() {
+            widgets::collapsible_card(ui, icon::MUSIC_NOTES, "Applications", apps.len(), |ui| {
+                if apps.is_empty() {
                     widgets::hint(ui, "Nothing is playing.");
                 }
-                for a in &audio.apps {
-                    let pattern = a.pattern();
-                    let target = Target::App { m: AppMatch { pattern, regex: false }, label: a.display_name() };
+                for g in &apps {
+                    let a = g[0];
+                    let name = a.display_name();
+                    let sub = stream_sub(g);
+                    if !shown(&name, sub.as_deref().unwrap_or_default()) {
+                        continue;
+                    }
+                    let target =
+                        Target::App { m: AppMatch { pattern: a.pattern(), regex: false }, label: name.clone() };
                     let hints = vec![a.icon.clone(), a.binary.clone(), a.app_name.clone()];
-                    let sub =
-                        (!a.media_name.is_empty() && a.media_name != a.display_name()).then(|| a.media_name.clone());
-                    let peak = peaks.get(&MeterKey::SinkInput(a.index)).copied().unwrap_or(0.0);
+                    let peak = g
+                        .iter()
+                        .map(|a| peaks.get(&MeterKey::SinkInput(a.index)).copied().unwrap_or(0.0))
+                        .fold(0.0, f32::max);
+                    let indices: Vec<u32> = g.iter().map(|a| a.index).collect();
                     self.source_row(
                         ui,
                         Kind::SinkInput,
-                        a.index,
-                        &a.display_name(),
+                        &indices,
+                        &name,
                         sub,
                         &hints,
                         a.volume,
-                        a.mute,
+                        g.iter().all(|a| a.mute),
                         None,
                         peak,
                         max,
@@ -762,22 +788,30 @@ impl App {
                 }
             });
             ui.add_space(8.0);
-            if !audio.app_inputs.is_empty() {
-                widgets::card(ui, icon::MICROPHONE, "Recording", |ui| {
-                    for a in &audio.app_inputs {
-                        let pattern = a.pattern();
-                        let target =
-                            Target::AppInput { m: AppMatch { pattern, regex: false }, label: a.display_name() };
+            if !inputs.is_empty() {
+                widgets::collapsible_card(ui, icon::MICROPHONE, "Recording", inputs.len(), |ui| {
+                    for g in &inputs {
+                        let a = g[0];
+                        let name = a.display_name();
+                        let sub = stream_sub(g).filter(|_| g.len() > 1);
+                        if !shown(&name, sub.as_deref().unwrap_or_default()) {
+                            continue;
+                        }
+                        let target = Target::AppInput {
+                            m: AppMatch { pattern: a.pattern(), regex: false },
+                            label: name.clone(),
+                        };
                         let hints = vec![a.icon.clone(), a.binary.clone(), a.app_name.clone()];
+                        let indices: Vec<u32> = g.iter().map(|a| a.index).collect();
                         self.source_row(
                             ui,
                             Kind::SourceOutput,
-                            a.index,
-                            &a.display_name(),
-                            None,
+                            &indices,
+                            &name,
+                            sub,
                             &hints,
                             a.volume,
-                            a.mute,
+                            g.iter().all(|a| a.mute),
                             None,
                             0.0,
                             max,
@@ -788,53 +822,49 @@ impl App {
                 });
                 ui.add_space(8.0);
             }
-            widgets::card(ui, icon::SPEAKER_HIGH, "Outputs", |ui| {
-                for d in &audio.sinks {
-                    let target = Target::Output { name: d.name.clone(), label: d.description.clone() };
-                    let hints = vec![d.icon.clone(), "audio-speakers".into()];
-                    let peak = peaks.get(&MeterKey::Sink(d.name.clone())).copied().unwrap_or(0.0);
-                    let default = Some((d.name == audio.default_sink, d.name.clone()));
-                    self.source_row(
-                        ui,
-                        Kind::Sink,
-                        d.index,
-                        &d.label,
-                        Some(d.detail.clone()).filter(|s| !s.is_empty()),
-                        &hints,
-                        d.volume,
-                        d.mute,
-                        default,
-                        peak,
-                        max,
-                        target,
-                        None,
-                    );
-                }
-            });
-            ui.add_space(8.0);
-            widgets::card(ui, icon::MICROPHONE_STAGE, "Inputs", |ui| {
-                for d in &audio.sources {
-                    let target = Target::Input { name: d.name.clone(), label: d.description.clone() };
-                    let hints = vec![d.icon.clone(), "audio-input-microphone".into()];
-                    let peak = peaks.get(&MeterKey::Source(d.name.clone())).copied().unwrap_or(0.0);
-                    let default = Some((d.name == audio.default_source, d.name.clone()));
-                    self.source_row(
-                        ui,
-                        Kind::Source,
-                        d.index,
-                        &d.label,
-                        Some(d.detail.clone()).filter(|s| !s.is_empty()),
-                        &hints,
-                        d.volume,
-                        d.mute,
-                        default,
-                        peak,
-                        max,
-                        target,
-                        None,
-                    );
-                }
-            });
+            for (kind, title, ic, devices, default) in [
+                (Kind::Sink, "Outputs", icon::SPEAKER_HIGH, &audio.sinks, &audio.default_sink),
+                (Kind::Source, "Inputs", icon::MICROPHONE_STAGE, &audio.sources, &audio.default_source),
+            ] {
+                widgets::collapsible_card(ui, ic, title, devices.len(), |ui| {
+                    for d in devices {
+                        if !shown(&d.label, &d.detail) {
+                            continue;
+                        }
+                        let (target, generic, meter) = if kind == Kind::Sink {
+                            (
+                                Target::Output { name: d.name.clone(), label: d.description.clone() },
+                                "audio-speakers",
+                                MeterKey::Sink(d.name.clone()),
+                            )
+                        } else {
+                            (
+                                Target::Input { name: d.name.clone(), label: d.description.clone() },
+                                "audio-input-microphone",
+                                MeterKey::Source(d.name.clone()),
+                            )
+                        };
+                        let hints = vec![d.icon.clone(), generic.into()];
+                        let peak = peaks.get(&meter).copied().unwrap_or(0.0);
+                        self.source_row(
+                            ui,
+                            kind,
+                            &[d.index],
+                            &d.label,
+                            Some(d.detail.clone()).filter(|s| !s.is_empty()),
+                            &hints,
+                            d.volume,
+                            d.mute,
+                            Some((d.name == *default, d.name.clone())),
+                            peak,
+                            max,
+                            target,
+                            None,
+                        );
+                    }
+                });
+                ui.add_space(8.0);
+            }
         });
     }
 
@@ -843,7 +873,7 @@ impl App {
         &mut self,
         ui: &mut egui::Ui,
         kind: Kind,
-        index: u32,
+        indices: &[u32],
         name: &str,
         sub: Option<String>,
         hints: &[String],
@@ -859,7 +889,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             // Drag handle: icon + name.
-            let id = ui.id().with(("src", kind as u8, index));
+            let id = ui.id().with(("src", kind as u8, indices.first().copied()));
             ui.dnd_drag_source(id, target, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(icon::DOTS_SIX_VERTICAL).color(pal().text_faint));
@@ -894,7 +924,9 @@ impl App {
                 let mut v = volume;
                 let r = ui.add(egui::Slider::new(&mut v, 0.0..=max.max(volume)).show_value(false).trailing_fill(true));
                 if r.changed() {
-                    self.send(UiCmd::SetStreamVolume(kind, index, v));
+                    for &i in indices {
+                        self.send(UiCmd::SetStreamVolume(kind, i, v));
+                    }
                 }
                 r.on_hover_text(format!("{:.0}%", volume * 100.0));
                 widgets::bar_meter(ui, peak, vec2(ui.spacing().slider_width, 3.0));
@@ -920,7 +952,9 @@ impl App {
                 RichText::new(icon::SPEAKER_HIGH).color(pal().text_dim)
             };
             if ui.add(egui::Button::new(m).frame(false)).on_hover_text(if mute { "Unmute" } else { "Mute" }).clicked() {
-                self.send(UiCmd::SetStreamMute(kind, index, !mute));
+                for &i in indices {
+                    self.send(UiCmd::SetStreamMute(kind, i, !mute));
+                }
             }
             // Which device an app plays on (or records from).
             if let Some((current, devices)) = route {
@@ -934,7 +968,9 @@ impl App {
                         let on = d.index == current;
                         let text = format!("{}  {}", if on { icon::CHECK } else { "    " }, d.label);
                         if ui.selectable_label(on, text).on_hover_text(&d.description).clicked() && !on {
-                            self.send(UiCmd::MoveStream(kind, index, d.name.clone()));
+                            for &i in indices {
+                                self.send(UiCmd::MoveStream(kind, i, d.name.clone()));
+                            }
                             ui.close();
                         }
                     }
@@ -972,6 +1008,39 @@ pub(super) fn target_glyph(t: &Target) -> &'static str {
 
 /// "47%", "MUTE", or the volume in amber with an arrow while the hardware
 /// control waits to pick it up.
+/// "Firefox ×2 + Spotify": names joined, repeats counted.
+fn join_counted(names: &[String]) -> String {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for n in names {
+        match counts.iter_mut().find(|(m, _)| m == n) {
+            Some((_, c)) => *c += 1,
+            None => counts.push((n, 1)),
+        }
+    }
+    counts.iter().map(|(n, c)| if *c > 1 { format!("{n} ×{c}") } else { n.to_string() }).collect::<Vec<_>>().join(" + ")
+}
+
+/// Streams of the same app (same match pattern) together, in first-seen order.
+fn group_streams(streams: &[crate::audio::AppStream]) -> Vec<Vec<&crate::audio::AppStream>> {
+    let mut groups: Vec<Vec<&crate::audio::AppStream>> = Vec::new();
+    for a in streams {
+        match groups.iter_mut().find(|g| g[0].pattern() == a.pattern()) {
+            Some(g) => g.push(a),
+            None => groups.push(vec![a]),
+        }
+    }
+    groups
+}
+
+/// Second line for an app row: what it plays, or how many streams it has.
+fn stream_sub(group: &[&crate::audio::AppStream]) -> Option<String> {
+    let a = group[0];
+    if group.len() > 1 {
+        return Some(format!("{} streams", group.len()));
+    }
+    (!a.media_name.is_empty() && a.media_name != a.display_name()).then(|| a.media_name.clone())
+}
+
 /// Generic icons offered for strips, besides the running apps' own.
 const ICON_CHOICES: &[&str] = &[
     "audio-headphones",
@@ -1021,5 +1090,29 @@ fn readout(ui: &mut egui::Ui, s: &StripView, size: f32) {
             let text = if s.muted { "MUTE".to_string() } else { format!("{:>3.0}%", s.position * 100.0) };
             ui.label(RichText::new(text).font(mono(size)).color(if s.muted { pal().mute_text } else { pal().readout }));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counted_names() {
+        let n = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(join_counted(&n(&["Firefox", "Spotify", "Firefox"])), "Firefox ×2 + Spotify");
+        assert_eq!(join_counted(&n(&["Discord"])), "Discord");
+    }
+
+    #[test]
+    fn streams_grouped_by_app() {
+        let s = |i, bin: &str| crate::audio::AppStream { index: i, binary: bin.into(), ..Default::default() };
+        let streams = [s(1, "game"), s(2, "firefox"), s(3, "game")];
+        let g = group_streams(&streams);
+        assert_eq!(
+            g.iter().map(|g| g.iter().map(|a| a.index).collect::<Vec<_>>()).collect::<Vec<_>>(),
+            [vec![1, 3], vec![2]]
+        );
+        assert_eq!(stream_sub(&g[0]).as_deref(), Some("2 streams"));
     }
 }
