@@ -317,7 +317,7 @@ impl App {
                 .horizontal(|ui| {
                     ui.add_space((inner.width() - 52.0 - 10.0 - 8.0) / 2.0);
                     let color = if sink.mute { pal().accent.gamma_multiply(0.35) } else { pal().accent };
-                    let marks = mapping::db_marks(boost, curve);
+                    let marks = mapping::db_marks(&mapping::Range { min: 0.0, top: boost, curve });
                     let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, None, &marks);
                     widgets::segment_meter(ui, peak, 0.0, vec2(10.0, h - 20.0));
                     r.changed()
@@ -352,7 +352,6 @@ impl App {
     ) {
         let response = ui.interact(zone, ui.id().with(("zone", &s.id)), Sense::click());
         let painter = ui.painter_at(zone.expand(12.0));
-        let curve = self.shared.lock().unwrap().store.settings.curve;
         let empty = s.targets.is_empty();
         let hovering = response.dnd_hover_payload::<Target>().is_some();
         let hover_t = theme::anim(ui.ctx(), response.id.with("drop"), if hovering { 1.0 } else { 0.0 }, 0.12);
@@ -458,7 +457,7 @@ impl App {
                     let changed = ui
                         .horizontal(|ui| {
                             ui.add_space((inner.width() - 52.0 - 10.0 - 8.0) / 2.0);
-                            let marks = if s.volume.is_some() { mapping::db_marks(s.range, curve) } else { Vec::new() };
+                            let marks = if s.volume.is_some() { mapping::db_marks(&s.range) } else { Vec::new() };
                             let r = widgets::fader(ui, &mut pos, vec2(52.0, h), color, s.pickup, &marks);
                             widgets::segment_meter(ui, s.peak, hold, vec2(10.0, h - 20.0));
                             r.changed()
@@ -838,18 +837,47 @@ impl App {
                 ui.close();
             }
         });
-        let current_max = {
+        // The fader's range and curve: e.g. a mic that never goes below 40%.
+        let (before, global_curve) = {
             let sh = self.shared.lock().unwrap();
-            sh.active().and_then(|p| p.current().get(gid)).map(|a| a.max_volume).unwrap_or(1.0)
+            let a = sh.active().and_then(|p| p.current().get(gid)).cloned().unwrap_or_default();
+            ((a.min_volume, a.max_volume, a.curve), sh.store.settings.curve)
         };
-        let mut max = current_max;
-        ui.horizontal(|ui| {
-            ui.label("Volume limit");
-            ui.add(egui::Slider::new(&mut max, 0.05..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+        let (mut min, mut max, mut curve) = before;
+        let pct = |v: f64, _: std::ops::RangeInclusive<usize>| format!("{:.0}%", v * 100.0);
+        egui::Grid::new(("range", gid)).num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            ui.label("Bottom");
+            ui.add(egui::Slider::new(&mut min, 0.0..=0.95).custom_formatter(pct));
+            ui.end_row();
+            ui.label("Top");
+            ui.add(egui::Slider::new(&mut max, 0.05..=1.0).custom_formatter(pct));
+            ui.end_row();
+            ui.label("Curve");
+            ui.horizontal(|ui| {
+                let mut own = curve.is_some();
+                if ui.checkbox(&mut own, "own").on_hover_text("Use a curve just for this strip").changed() {
+                    curve = own.then_some(global_curve);
+                }
+                match &mut curve {
+                    Some(c) => {
+                        ui.add(egui::Slider::new(c, 0.5..=3.0).step_by(0.1).fixed_decimals(1));
+                    }
+                    None => {
+                        widgets::hint(ui, &format!("{global_curve:.1} (Settings)"));
+                    }
+                }
+            });
+            ui.end_row();
         });
-        if (max - current_max).abs() > f32::EPSILON {
+        if min > max {
+            min = max;
+        }
+        if (min, max, curve) != before {
             let gid = gid.to_string();
-            self.edit_profile(|p| p.current_mut().entry(gid).or_default().max_volume = max);
+            self.edit_profile(|p| {
+                let a = p.current_mut().entry(gid).or_default();
+                (a.min_volume, a.max_volume, a.curve) = (min, max, curve);
+            });
         }
     }
 

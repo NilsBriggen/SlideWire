@@ -431,6 +431,12 @@ pub struct GroupSettings {
     /// Upper volume limit applied to this group's targets (1.0 = 100%).
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub max_volume: f32,
+    /// Volume at the bottom of the fader.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub min_volume: f32,
+    /// This strip's own volume curve, instead of the one in Settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<f32>,
     /// How the mixer draws this group; guessed from the controls if unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub widget: Option<Widget>,
@@ -472,7 +478,17 @@ pub enum Widget {
 
 impl Default for GroupSettings {
     fn default() -> Self {
-        Self { targets: Vec::new(), max_volume: 1.0, widget: None, label: None, color: None, icon: None, duck: None }
+        Self {
+            targets: Vec::new(),
+            max_volume: 1.0,
+            min_volume: 0.0,
+            curve: None,
+            widget: None,
+            label: None,
+            color: None,
+            icon: None,
+            duck: None,
+        }
     }
 }
 
@@ -688,6 +704,9 @@ fn is_false(b: &bool) -> bool {
 }
 fn one() -> f32 {
     1.0
+}
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
 }
 fn is_one(v: &f32) -> bool {
     (*v - 1.0).abs() < f32::EPSILON

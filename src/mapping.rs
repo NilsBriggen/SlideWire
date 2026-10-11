@@ -178,15 +178,46 @@ pub fn inverse_curve(vol: f32, exponent: f32) -> f32 {
     vol.clamp(0.0, 1.0).powf(1.0 / exponent.max(0.1))
 }
 
+/// The volumes a fader covers: `min` at the bottom, `top` at the top, and
+/// the curve in between (1.0 = PulseAudio's own scale).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Range {
+    pub min: f32,
+    pub top: f32,
+    pub curve: f32,
+}
+
+impl Default for Range {
+    fn default() -> Self {
+        Range { min: 0.0, top: 1.0, curve: 1.0 }
+    }
+}
+
+impl Range {
+    /// Fader position (0..=1) -> volume.
+    pub fn volume(&self, pos: f32) -> f32 {
+        self.min + curve(pos, self.curve) * (self.top - self.min).max(0.0)
+    }
+
+    /// Volume -> fader position; volumes outside the range pin to the ends.
+    pub fn position(&self, vol: f32) -> f32 {
+        let span = self.top - self.min;
+        if span <= 1e-4 {
+            return 0.0;
+        }
+        inverse_curve((vol - self.min) / span, self.curve)
+    }
+}
+
 /// Where the dB marks sit on a fader: (position 0..=1, dB) for the marks
-/// that fit. `range` is the volume at the top (max volume times boost);
-/// PulseAudio's volume scale is cubic, so dB = 60·log10(volume).
-pub fn db_marks(range: f32, exponent: f32) -> Vec<(f32, i32)> {
+/// inside its range. PulseAudio's volume scale is cubic, so
+/// dB = 60·log10(volume).
+pub fn db_marks(r: &Range) -> Vec<(f32, i32)> {
     [6, 0, -6, -12, -24, -48]
         .into_iter()
         .filter_map(|db| {
             let vol = 10f32.powf(db as f32 / 60.0);
-            (vol <= range + 1e-4).then(|| (inverse_curve(vol / range, exponent), db))
+            (vol <= r.top + 1e-4 && vol >= r.min - 1e-4).then(|| (r.position(vol), db))
         })
         .collect()
 }
@@ -282,16 +313,34 @@ mod tests {
 
     #[test]
     fn db_marks() {
-        let m = super::db_marks(1.0, 1.0);
+        use super::Range;
+        let r = |min, top, curve| Range { min, top, curve };
+        let m = super::db_marks(&r(0.0, 1.0, 1.0));
         assert_eq!(m.iter().map(|m| m.1).collect::<Vec<_>>(), [0, -6, -12, -24, -48]);
         assert!((m[0].0 - 1.0).abs() < 1e-4);
         assert!((m[1].0 - 0.794).abs() < 0.01); // -6 dB is 79% on the cubic scale
         // With boost, +6 dB fits and 0 dB moves down.
-        let m = super::db_marks(1.5, 1.0);
+        let m = super::db_marks(&r(0.0, 1.5, 1.0));
         assert_eq!(m[0].1, 6);
         assert!((m[1].0 - 1.0 / 1.5).abs() < 1e-3);
         // A steeper curve spreads the low end.
-        assert!(super::db_marks(1.0, 2.0)[4].0 > super::db_marks(1.0, 1.0)[4].0);
+        assert!(super::db_marks(&r(0.0, 1.0, 2.0))[4].0 > super::db_marks(&r(0.0, 1.0, 1.0))[4].0);
+        // A raised floor drops the marks below it.
+        assert_eq!(super::db_marks(&r(0.4, 1.0, 1.0)).last().unwrap().1, -12);
+    }
+
+    #[test]
+    fn ranges() {
+        let mic = super::Range { min: 0.4, top: 1.0, curve: 1.0 };
+        assert_eq!(mic.volume(0.0), 0.4);
+        assert_eq!(mic.volume(1.0), 1.0);
+        assert!((mic.volume(0.5) - 0.7).abs() < 1e-6);
+        assert!((mic.position(0.7) - 0.5).abs() < 1e-6);
+        // Below the floor pins to the bottom; empty ranges don't divide by zero.
+        assert_eq!(mic.position(0.1), 0.0);
+        assert_eq!(super::Range { min: 0.5, top: 0.5, curve: 1.0 }.position(0.5), 0.0);
+        let steep = super::Range { curve: 2.0, ..Default::default() };
+        assert!((steep.position(steep.volume(0.3)) - 0.3).abs() < 1e-5);
     }
 
     use super::*;

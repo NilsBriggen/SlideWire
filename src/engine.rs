@@ -108,8 +108,8 @@ pub struct StripView {
     pub icon_hint: Vec<String>,
     /// Where the hardware fader is while it waits to pick up the volume.
     pub pickup: Option<f32>,
-    /// Volume at the top of the fader (max volume times boost).
-    pub range: f32,
+    /// The volumes the fader covers.
+    pub range: mapping::Range,
     /// Turned down right now because another strip is playing.
     pub ducked: bool,
     /// Icon names to try, per resolved target.
@@ -967,6 +967,16 @@ impl Engine {
         profile.current().get(gid).map(|a| (a.targets.clone(), a.max_volume)).unwrap_or((Vec::new(), 1.0))
     }
 
+    /// The volumes a group's fader covers: its own floor, limit and curve,
+    /// and the boost setting.
+    fn group_range(&self, profile: &Profile, gid: &str) -> mapping::Range {
+        let (curve, boost) = self.vol_range();
+        let a = profile.current().get(gid);
+        let max = a.map_or(1.0, |a| a.max_volume);
+        let min = a.map_or(0.0, |a| a.min_volume).min(max);
+        mapping::Range { min, top: max * boost, curve: a.and_then(|a| a.curve).unwrap_or(curve) }
+    }
+
     fn vol_range(&self) -> (f32, f32) {
         let s = &self.shared.lock().unwrap().store.settings;
         (s.curve, if s.allow_boost { 1.5 } else { 1.0 })
@@ -988,20 +998,19 @@ impl Engine {
 
     /// Current slider position of a group.
     fn group_position(&mut self, profile: &Profile, gid: &str) -> f32 {
-        let (targets, max) = self.group_settings(profile, gid);
+        let (targets, _) = self.group_settings(profile, gid);
         let res = self.resolve(profile, &targets);
-        let (curve, boost) = self.vol_range();
+        let range = self.group_range(profile, gid);
         match res.first() {
-            Some(r) => mapping::inverse_curve(self.undocked_volume(r) / (max * boost), curve),
+            Some(r) => range.position(self.undocked_volume(r)),
             None => self.positions.get(gid).copied().unwrap_or(0.0),
         }
     }
 
     fn set_group_position(&mut self, profile: &Profile, gid: &str, pos: f32, osd: bool) {
         self.positions.insert(gid.to_string(), pos);
-        let (targets, max) = self.group_settings(profile, gid);
-        let (curve, boost) = self.vol_range();
-        let vol = mapping::curve(pos, curve) * max * boost;
+        let (targets, _) = self.group_settings(profile, gid);
+        let vol = self.group_range(profile, gid).volume(pos);
         let res = self.resolve(profile, &targets);
         let gain = self.ducker.gain;
         for r in &res {
@@ -1307,7 +1316,6 @@ impl Engine {
             return;
         };
         let audio = self.shared.lock().unwrap().audio.clone();
-        let (curve, boost) = self.vol_range();
         let mut strips = Vec::new();
         let mut msgs: Vec<Vec<u8>> = Vec::new();
         let mut meters = HashSet::new();
@@ -1315,13 +1323,14 @@ impl Engine {
         let ui_visible = self.shared.lock().unwrap().ui_visible;
 
         for (gid, g) in &profile.groups {
-            let (targets, max) = self.group_settings(&profile, gid);
+            let (targets, _) = self.group_settings(&profile, gid);
+            let range = self.group_range(&profile, gid);
             let settings = profile.current().get(gid);
             let res = self.resolve(&profile, &targets);
             let ducked =
                 res.first().is_some_and(|r| r.kind == Kind::SinkInput && self.duck_base.contains_key(&r.index));
             let position = match res.first() {
-                Some(r) => mapping::inverse_curve(self.undocked_volume(r) / (max * boost), curve),
+                Some(r) => range.position(self.undocked_volume(r)),
                 None => self.positions.get(gid).copied().unwrap_or(0.0),
             };
             let muted = !res.is_empty() && res.iter().all(|r| r.mute);
@@ -1385,7 +1394,7 @@ impl Engine {
                     }),
                 icon_hint: res.first().map(|r| r.hints.clone()).unwrap_or_default(),
                 pickup: self.waiting.get(gid).copied().filter(|p| (p - position).abs() > 0.03),
-                range: max * boost,
+                range,
                 ducked,
                 icons: res.iter().map(|r| r.hints.clone()).collect(),
                 label: settings.and_then(|a| a.label.clone()),
