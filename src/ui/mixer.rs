@@ -163,8 +163,10 @@ impl App {
 
     /// Recall, save and delete scenes (volume and mute snapshots).
     fn scenes_menu(&mut self, ui: &mut egui::Ui, scenes: &[String]) {
-        ui.menu_button(format!("{}  Scenes", icon::BOOKMARKS_SIMPLE), |ui| {
-            ui.set_min_width(240.0);
+        let button = widgets::icon_button(ui, icon::BOOKMARKS_SIMPLE, "Scenes");
+        // Stays open while typing a name (a plain menu closes on any click inside).
+        egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            ui.set_width(260.0);
             if scenes.is_empty() {
                 widgets::hint(ui, "Save the current volumes and mutes to recall them later.");
             }

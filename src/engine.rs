@@ -613,11 +613,36 @@ impl Engine {
         drop(sh);
         self.positions.clear();
         self.waiting.clear();
+        self.mark_pickup();
         if osd {
             self.osd.show_text("view-grid", &format!("Bank {}", new + 1));
         }
         self.sent.clear();
         self.feedback();
+    }
+
+    /// After volumes changed under the faders (bank switch, scene recall),
+    /// mark the ones that now have to pick up, so the mixer shows where they are.
+    fn mark_pickup(&mut self) {
+        if !self.shared.lock().unwrap().store.settings.pickup {
+            return;
+        }
+        let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
+        for (gid, g) in &profile.groups {
+            let Some((cid, hw)) = g.faders.iter().find_map(|c| self.hw_pos.get(c).map(|p| (c, *p))) else {
+                continue;
+            };
+            if profile.controls.get(cid).is_some_and(|c| c.is_motorized()) {
+                continue;
+            }
+            let (targets, _) = self.group_settings(&profile, gid);
+            if self.resolve(&profile, &targets).is_empty() {
+                continue;
+            }
+            if !mapping::picks_up(None, hw, self.group_position(&profile, gid)) {
+                self.waiting.insert(gid.clone(), hw);
+            }
+        }
     }
 
     fn save_scene(&mut self, name: &str) {
@@ -661,6 +686,7 @@ impl Engine {
                 self.optimistic(r.kind, r.index, None, Some(st.mute));
             }
         }
+        self.mark_pickup();
         if self.shared.lock().unwrap().store.settings.osd {
             self.osd.show_text("view-media-playlist", &format!("Scene: {name}"));
         }
