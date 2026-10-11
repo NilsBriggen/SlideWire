@@ -9,6 +9,7 @@ mod dbus;
 mod doctor;
 mod engine;
 mod focus;
+mod i18n;
 mod icon;
 mod mapping;
 mod midi;
@@ -25,6 +26,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use engine::{Engine, Event, FocusInfo, Shared};
+
+rust_i18n::i18n!("locales", fallback = "en");
 
 /// The app's id: D-Bus name, desktop file, icon and window class.
 pub const APP_ID: &str = "dev.briggen.Slidewire";
@@ -156,6 +159,7 @@ fn main() {
     }
 
     install_panic_hook();
+    i18n::init();
     // Handle SIGTERM/SIGINT/SIGHUP on one thread (blocked everywhere else,
     // which threads spawned from here inherit).
     let signals = block_quit_signals();
