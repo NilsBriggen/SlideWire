@@ -379,8 +379,8 @@ impl App {
                         ui,
                         Kind::Sink,
                         d.index,
-                        &d.description,
-                        None,
+                        &d.label,
+                        Some(d.detail.clone()).filter(|s| !s.is_empty()),
                         &hints,
                         d.volume,
                         d.mute,
@@ -402,8 +402,8 @@ impl App {
                         ui,
                         Kind::Source,
                         d.index,
-                        &d.description,
-                        None,
+                        &d.label,
+                        Some(d.detail.clone()).filter(|s| !s.is_empty()),
                         &hints,
                         d.volume,
                         d.mute,
@@ -451,7 +451,7 @@ impl App {
                     }
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.set_width(118.0);
+                        ui.set_width(146.0);
                         ui.add(egui::Label::new(RichText::new(name).size(13.0)).truncate());
                         if let Some(sub) = &sub {
                             ui.add(egui::Label::new(RichText::new(sub).size(11.0).color(TEXT_DIM)).truncate());
@@ -460,7 +460,10 @@ impl App {
                 });
             })
             .response
-            .on_hover_text(name)
+            .on_hover_text(match &sub {
+                Some(sub) => format!("{name}\n{sub}"),
+                None => name.to_string(),
+            })
             .on_hover_cursor(egui::CursorIcon::Grab);
 
             ui.vertical(|ui| {

@@ -523,7 +523,7 @@ impl Engine {
         let list = if kind == Kind::Sink { &sh.audio.sinks } else { &sh.audio.sources };
         if let Some(d) = list.iter().find(|d| d.name == name) {
             let icon = if kind == Kind::Sink { "audio-speakers" } else { "audio-input-microphone" };
-            self.osd.show(icon, (d.volume * 100.0).round() as i32, &d.description);
+            self.osd.show(icon, (d.volume * 100.0).round() as i32, &d.label);
         }
     }
 
@@ -806,7 +806,7 @@ impl Engine {
         let device = |d: &crate::audio::Device, kind: Kind| Resolved {
             kind,
             index: d.index,
-            label: d.description.clone(),
+            label: d.label.clone(),
             icon: if d.icon.is_empty() {
                 if kind == Kind::Sink { "audio-speakers".into() } else { "audio-input-microphone".into() }
             } else {

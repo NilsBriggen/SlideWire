@@ -267,7 +267,8 @@ pub fn bar_meter(ui: &mut Ui, level: f32, size: Vec2) -> Response {
     response
 }
 
-/// Scribble-strip style display with optional icon; long text scrolls.
+/// Scribble-strip style display with optional icon; long text is cut with
+/// "…" and scrolls while hovered.
 pub fn lcd(ui: &mut Ui, size: Vec2, icon: Option<egui::Image<'_>>, text: &str, dim: bool) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
@@ -288,12 +289,17 @@ pub fn lcd(ui: &mut Ui, size: Vec2, icon: Option<egui::Image<'_>>, text: &str, d
     }
     let color = if dim { LCD_DIM } else { LCD_TEXT };
     let font = mono(12.0);
-    let galley = painter.layout_no_wrap(text.to_string(), font, color);
+    let galley = painter.layout_no_wrap(text.to_string(), font.clone(), color);
     let clip = painter.with_clip_rect(text_rect);
     let y = text_rect.center().y - galley.size().y / 2.0;
     if galley.size().x <= text_rect.width() {
         let x = text_rect.center().x - galley.size().x / 2.0;
         clip.galley(pos2(x, y), galley, color);
+    } else if !response.hovered() {
+        let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(text_rect.width());
+        let cut = painter.layout_job(job);
+        clip.galley(pos2(text_rect.left(), y), cut, color);
     } else {
         // Marquee.
         let gap = 30.0;

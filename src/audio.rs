@@ -36,6 +36,9 @@ pub struct Device {
     pub index: u32,
     pub name: String,
     pub description: String,
+    /// Short name ("FiiO K11") and the rest ("Digital Stereo (IEC958)").
+    pub label: String,
+    pub detail: String,
     pub icon: String,
     /// 1.0 = 100%.
     pub volume: f32,
@@ -295,6 +298,37 @@ fn run(rx: &Receiver<AudioCmd>, peaks: &Peaks, on_change: &dyn Fn(AudioState)) -
     }
 }
 
+/// `label` holds the card's name ("FiiO K11") when the device has one; the
+/// rest of the description becomes `detail`.
+fn split_label(mut d: Device) -> Device {
+    let nick = std::mem::take(&mut d.label);
+    match d.description.strip_prefix(nick.as_str()) {
+        Some(rest) if !nick.is_empty() => {
+            d.label = nick.clone();
+            d.detail = rest.trim().to_string();
+        }
+        _ => d.label = d.description.clone(),
+    }
+    d
+}
+
+/// Some apps (games under Wine, mostly) send names that were decoded as
+/// Latin-1 somewhere on the way: "HELLDIVERSï¿½ 2". Undo that, and drop
+/// replacement characters that carry no information.
+fn repair_text(s: &str) -> String {
+    let mut out = s.to_string();
+    if s.chars().all(|c| (c as u32) < 0x100) && s.chars().any(|c| (c as u32) >= 0x80) {
+        let bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
+        if let Ok(fixed) = String::from_utf8(bytes) {
+            out = fixed;
+        }
+    }
+    if out.contains('\u{FFFD}') {
+        out = out.replace('\u{FFFD}', "").split_whitespace().collect::<Vec<_>>().join(" ");
+    }
+    out
+}
+
 fn props_str(p: &Proplist, key: &str) -> String {
     p.get_str(key).unwrap_or_default()
 }
@@ -326,13 +360,15 @@ fn refresh(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>) {
                                 index: i.index,
                                 name: i.name.as_deref().unwrap_or_default().to_string(),
                                 description: i.description.as_deref().unwrap_or_default().to_string(),
+                                label: props_str(&i.proplist, "device.description"),
+                                detail: String::new(),
                                 icon: props_str(&i.proplist, "device.icon_name"),
                                 volume: vol_frac(&i.volume),
                                 mute: i.mute,
                                 channels: i.volume.len(),
                                 monitor_source: i.monitor_source_name.as_deref().unwrap_or_default().to_string(),
                             };
-                            s.new_sinks.push(d);
+                            s.new_sinks.push(split_label(d));
                         }
                         ListResult::End | ListResult::Error => {
                             s.state.sinks = std::mem::take(&mut s.new_sinks);
@@ -355,13 +391,15 @@ fn refresh(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>) {
                                 index: i.index,
                                 name: i.name.as_deref().unwrap_or_default().to_string(),
                                 description: i.description.as_deref().unwrap_or_default().to_string(),
+                                label: props_str(&i.proplist, "device.description"),
+                                detail: String::new(),
                                 icon: props_str(&i.proplist, "device.icon_name"),
                                 volume: vol_frac(&i.volume),
                                 mute: i.mute,
                                 channels: i.volume.len(),
                                 monitor_source: String::new(),
                             };
-                            s.new_sources.push(d);
+                            s.new_sources.push(split_label(d));
                         }
                         ListResult::End | ListResult::Error => {
                             s.state.sources = std::mem::take(&mut s.new_sources);
@@ -425,10 +463,10 @@ fn refresh(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>) {
 fn app_stream(index: u32, p: &Proplist, v: &ChannelVolumes, mute: bool, device: u32, name: Option<&str>) -> AppStream {
     AppStream {
         index,
-        app_name: props_str(p, "application.name"),
+        app_name: repair_text(&props_str(p, "application.name")),
         binary: props_str(p, "application.process.binary"),
         pid: props_str(p, "application.process.id").parse().ok(),
-        media_name: name.map(str::to_string).unwrap_or_else(|| props_str(p, "media.name")),
+        media_name: repair_text(&name.map(str::to_string).unwrap_or_else(|| props_str(p, "media.name"))),
         icon: props_str(p, "application.icon_name"),
         role: props_str(p, "media.role"),
         volume: vol_frac(v),
@@ -573,5 +611,31 @@ fn sync_meters(
             }
         })));
         meters.insert(k.clone(), stream);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repairs_mojibake() {
+        assert_eq!(repair_text("HELLDIVERSï¿½ 2"), "HELLDIVERS 2");
+        assert_eq!(repair_text("CafÃ© Radio"), "Café Radio");
+        assert_eq!(repair_text("Café Radio"), "Café Radio");
+        assert_eq!(repair_text("Firefox"), "Firefox");
+        assert_eq!(repair_text("ÄÖÜ"), "ÄÖÜ");
+    }
+
+    #[test]
+    fn device_labels() {
+        let d = split_label(Device {
+            description: "FiiO K11 Digital Stereo (IEC958)".into(),
+            label: "FiiO K11".into(),
+            ..Default::default()
+        });
+        assert_eq!((d.label.as_str(), d.detail.as_str()), ("FiiO K11", "Digital Stereo (IEC958)"));
+        let d = split_label(Device { description: "Virtual Sink".into(), ..Default::default() });
+        assert_eq!((d.label.as_str(), d.detail.as_str()), ("Virtual Sink", ""));
     }
 }
