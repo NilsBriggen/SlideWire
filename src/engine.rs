@@ -748,8 +748,10 @@ impl Engine {
             ButtonAction::PushToMute => self.mute_default_input(true),
             ButtonAction::Monitor { source, sink } => self.toggle_monitor(source, sink),
             ButtonAction::EasyEffects { preset } => {
+                // Start it before taking the lock: spawning can take a moment.
+                let result = crate::routing::easyeffects_load(preset);
                 let mut sh = self.shared.lock().unwrap();
-                match crate::routing::easyeffects_load(preset) {
+                match result {
                     Ok(()) => {
                         if sh.store.settings.osd {
                             self.osd.show_text(
@@ -1367,7 +1369,7 @@ impl Engine {
         if sh.store.settings.osd {
             let icon = if mute { "audio-volume-muted" } else { "audio-volume-high" };
             let label = if res.len() == 1 { res[0].label.clone() } else { profile.groups[gid].name.clone() };
-            let pct = if mute { 0 } else { (res[0].volume * 100.0).round() as i32 };
+            let pct = if mute { 0 } else { (self.undocked_volume(&res[0]) * 100.0).round() as i32 };
             let text = if mute { t!("%{target} — muted", target = label).to_string() } else { label };
             self.osd.show(icon, pct, &text);
         }

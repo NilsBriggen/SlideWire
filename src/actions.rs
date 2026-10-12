@@ -21,12 +21,30 @@ pub fn spawn_detached(cmd: &mut std::process::Command) -> Result<()> {
     Ok(())
 }
 
+/// The keys of a combination like `ctrl+shift+m`. The plus key itself is
+/// `plus`, or a `+` of its own: `ctrl++`.
+fn split_combo(combo: &str) -> Vec<&str> {
+    let parts: Vec<&str> = combo.split('+').map(str::trim).collect();
+    let mut keys = Vec::new();
+    let mut i = 0;
+    while i < parts.len() {
+        if parts[i].is_empty() && parts.get(i + 1).is_some_and(|p| p.is_empty()) {
+            keys.push("+");
+            i += 2;
+        } else {
+            keys.push(parts[i]);
+            i += 1;
+        }
+    }
+    keys
+}
+
 /// Press a combination like `ctrl+shift+m` through ydotool (works on Wayland;
 /// requires the ydotoold daemon).
 pub fn press_keys(combo: &str) -> Result<()> {
-    let codes: Vec<u16> = combo
-        .split('+')
-        .map(|k| keycode(k.trim()).ok_or_else(|| anyhow!("unknown key '{k}'")))
+    let codes: Vec<u16> = split_combo(combo)
+        .into_iter()
+        .map(|k| keycode(k).ok_or_else(|| anyhow!("unknown key '{k}'")))
         .collect::<Result<_>>()?;
     if codes.is_empty() {
         bail!("empty key combination");
@@ -102,6 +120,8 @@ fn keycode(name: &str) -> Option<u16> {
         "right" => 106,
         "minus" | "-" => 12,
         "equal" | "=" => 13,
+        "plus" | "+" | "kpplus" => 78,
+        "kpminus" => 74,
         "comma" | "," => 51,
         "dot" | "." => 52,
         "slash" | "/" => 53,
@@ -118,7 +138,7 @@ fn keycode(name: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::keycode;
+    use super::{keycode, split_combo};
 
     #[test]
     fn keycodes() {
@@ -129,5 +149,14 @@ mod tests {
         assert_eq!(keycode("F12"), Some(88));
         assert_eq!(keycode("ctrl"), Some(29));
         assert_eq!(keycode("nope"), None);
+    }
+
+    #[test]
+    fn combos_with_plus() {
+        assert_eq!(split_combo("ctrl+shift+m"), ["ctrl", "shift", "m"]);
+        assert_eq!(split_combo("ctrl++"), ["ctrl", "+"]);
+        assert_eq!(split_combo("ctrl + plus"), ["ctrl", "plus"]);
+        assert_eq!(split_combo("+"), ["+"]);
+        assert_eq!(keycode("+"), keycode("plus"));
     }
 }

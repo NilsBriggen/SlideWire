@@ -610,12 +610,27 @@ impl Profile {
         self.bank
     }
 
-    /// Remove bank `i` (bank 1 can't be removed, only cleared).
+    /// Remove bank `i` (bank 1 can't be removed, only cleared). Scenes
+    /// and focus rules that named a later bank follow it down; those on
+    /// the removed bank move to bank 1.
     pub fn remove_bank(&mut self, i: usize) {
         if i == 0 {
             self.assignments.values_mut().for_each(|a| a.targets.clear());
         } else if i <= self.banks.len() {
             self.banks.remove(i - 1);
+            let renumber = |b: &mut usize| {
+                if *b == i {
+                    *b = 0;
+                } else if *b > i {
+                    *b -= 1;
+                }
+            };
+            self.scenes.values_mut().for_each(|s| renumber(&mut s.bank));
+            for rule in &mut self.auto {
+                if let AutoAction::Bank { bank } = &mut rule.action {
+                    renumber(bank);
+                }
+            }
         }
         if self.bank >= self.bank_count() {
             self.bank = self.bank_count() - 1;
@@ -900,5 +915,27 @@ mod tests {
         assert!(!json.contains("\"banks\":") && !json.contains("\"bank\":"));
         let back: Profile = serde_json::from_str(&json).unwrap();
         assert_eq!(back.bank_count(), 1);
+    }
+
+    #[test]
+    fn removing_a_bank_renumbers_scenes_and_rules() {
+        let mut p = Profile::nanokontrol2();
+        p.banks = vec![Default::default(), Default::default(), Default::default()];
+        for (name, bank) in [("one", 0), ("two", 1), ("three", 2), ("four", 3)] {
+            p.scenes.insert(name.into(), Scene { bank, ..Default::default() });
+        }
+        let rule = |bank| AutoRule {
+            app: AppMatch { pattern: "game".into(), regex: false },
+            label: String::new(),
+            action: AutoAction::Bank { bank },
+        };
+        p.auto = vec![rule(1), rule(3)];
+        p.remove_bank(1);
+        let banks: Vec<usize> = p.scenes.values().map(|s| s.bank).collect();
+        assert_eq!(banks, [0, 0, 1, 2]);
+        assert_eq!(p.auto, [rule(0), rule(2)]);
+        // Clearing bank 1 changes nothing else.
+        p.remove_bank(0);
+        assert_eq!(p.scenes.values().map(|s| s.bank).collect::<Vec<_>>(), [0, 0, 1, 2]);
     }
 }

@@ -97,7 +97,26 @@ fn call(url: &str, password: &str, kind: &str, data: Value) -> Result<Value> {
     }
 }
 
+/// `ws://host:port` from what the user typed: `localhost`, `pc:4455` or a
+/// full address. OBS listens on 4455 unless set otherwise.
+fn normalize_url(input: &str) -> Result<String> {
+    let input = input.trim();
+    if input.starts_with("wss://") {
+        bail!("OBS's WebSocket server doesn't use TLS; use a ws:// address");
+    }
+    let rest = input.strip_prefix("ws://").unwrap_or(input);
+    let (host, path) = rest.split_once('/').map_or((rest, ""), |(h, p)| (h, p));
+    if host.is_empty() {
+        bail!("no OBS address set");
+    }
+    // A port is there unless the address ends in a name (or a bracketed IPv6 address).
+    let has_port = host.rsplit_once(':').is_some_and(|(h, p)| !h.is_empty() && p.parse::<u16>().is_ok());
+    let host = if has_port { host.to_string() } else { format!("{host}:4455") };
+    Ok(if path.is_empty() { format!("ws://{host}") } else { format!("ws://{host}/{path}") })
+}
+
 fn connect(url: &str) -> Result<WebSocket<TcpStream>> {
+    let url = &normalize_url(url)?;
     let host = url.trim_start_matches("ws://").split('/').next().unwrap_or_default();
     let addr = std::net::ToSocketAddrs::to_socket_addrs(host)
         .with_context(|| format!("bad OBS address {url}"))?
@@ -134,6 +153,17 @@ fn auth_string(password: &str, salt: &str, challenge: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn addresses() {
+        let n = |s| super::normalize_url(s).map_err(|e| e.to_string());
+        assert_eq!(n("ws://localhost:4455").unwrap(), "ws://localhost:4455");
+        assert_eq!(n("localhost").unwrap(), "ws://localhost:4455");
+        assert_eq!(n("192.168.1.5:4444").unwrap(), "ws://192.168.1.5:4444");
+        assert_eq!(n(" ws://studio-pc ").unwrap(), "ws://studio-pc:4455");
+        assert!(n("wss://studio-pc").unwrap_err().contains("TLS"));
+        assert!(n("").is_err());
+    }
+
     #[test]
     fn auth_matches_the_protocol_example() {
         // The example from the obs-websocket protocol documentation.
