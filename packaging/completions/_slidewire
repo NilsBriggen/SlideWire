@@ -6,8 +6,14 @@ _slidewire() {
         'strips:list strips with volume and assignment'
         'set:set or change a strip'"'"'s volume'
         'mute:mute or unmute a strip'
+        'mic:mute or unmute the microphone'
         'bank:switch to a bank'
-        'scene:recall a scene'
+        'banks:show the current bank'
+        'scene:recall or save a scene'
+        'scenes:list scenes'
+        'profile:switch profile'
+        'profiles:list profiles'
+        'state:everything as JSON'
     )
     if (( CURRENT == 2 )); then
         _describe 'command' commands
@@ -25,6 +31,10 @@ _slidewire() {
     fi
     case $words[2] in
         mute) (( CURRENT == 4 )) && _values 'mode' on off toggle ;;
+        mic) (( CURRENT == 3 )) && _values 'mode' on off toggle ;;
+        scene) (( CURRENT == 3 )) && _values 'scene' save ;;
+        set) _arguments '--volume[set the volume itself, through the strip'"'"'s range]' ;;
+        strips|scenes|banks|profiles) _arguments '--json[print JSON]' ;;
     esac
 }
 

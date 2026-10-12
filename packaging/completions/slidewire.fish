@@ -1,12 +1,21 @@
 # fish completion for slidewire
-set -l commands strips set mute bank scene
+set -l commands strips set mute mic bank banks scene scenes profile profiles state
 complete -c slidewire -f
 complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a strips -d 'List strips with volume and assignment'
 complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a set -d "Set or change a strip's volume"
 complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a mute -d 'Mute or unmute a strip'
 complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a bank -d 'Switch to a bank'
-complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a scene -d 'Recall a scene'
-complete -c slidewire -n "__fish_seen_subcommand_from mute" -a 'on off toggle'
+complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a scene -d 'Recall or save a scene'
+complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a mic -d 'Mute or unmute the microphone'
+complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a banks -d 'Show the current bank'
+complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a scenes -d 'List scenes'
+complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a profile -d 'Switch profile'
+complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a profiles -d 'List profiles'
+complete -c slidewire -n "not __fish_seen_subcommand_from $commands" -a state -d 'Everything as JSON'
+complete -c slidewire -n "__fish_seen_subcommand_from mute mic" -a 'on off toggle'
+complete -c slidewire -n "__fish_seen_subcommand_from scene" -a save -d 'Save the strips as a scene'
+complete -c slidewire -n "__fish_seen_subcommand_from set" -l volume -d "Set the volume itself, through the strip's range"
+complete -c slidewire -n "__fish_seen_subcommand_from strips scenes banks profiles" -l json -d 'Print JSON'
 complete -c slidewire -l minimized -d 'Start in the tray'
 complete -c slidewire -l list-ports -d 'List MIDI ports'
 complete -c slidewire -l monitor -d 'Print incoming MIDI'

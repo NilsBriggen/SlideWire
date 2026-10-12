@@ -40,6 +40,10 @@ pub enum WindowCmd {
     Quit,
 }
 
+/// Subcommands that talk to the running app.
+pub const REMOTE_COMMANDS: [&str; 11] =
+    ["strips", "set", "mute", "mic", "bank", "banks", "scene", "scenes", "profile", "profiles", "state"];
+
 const HELP: &str = "Slidewire
 
 USAGE: slidewire [OPTIONS]
@@ -55,17 +59,26 @@ OPTIONS:
     -h, --help           show this help
 
 CONTROL THE RUNNING APP (for scripts and keyboard shortcuts):
-    slidewire strips                     list strips with volume and assignment
-    slidewire set STRIP 50|+5|-5         set or change a strip's volume (percent)
+    slidewire strips [--json]            list strips with volume and assignment
+    slidewire set STRIP 50|+5|-5         set or change a strip's fader position (percent)
+    slidewire set STRIP 50 --volume      set the volume itself, through the strip's range
     slidewire mute STRIP [on|off|toggle]
+    slidewire mic [on|off|toggle]        mute or unmute the default microphone
     slidewire bank N                     switch to bank N
+    slidewire banks [--json]             show the current bank
     slidewire scene NAME                 recall a scene
-  STRIP is a strip name like \"Knob 3\", or a number for that fader.
+    slidewire scene save NAME            save the strips as a scene
+    slidewire scenes [--json]            list scenes
+    slidewire profile NAME               switch profile
+    slidewire profiles [--json]          list profiles (* = active)
+    slidewire state                      everything above, as JSON
+  STRIP is the name you gave a strip (\"Music\"), a control name like
+  \"Knob 3\", or a number for that fader. Names ignore case.
 ";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|a| ["strips", "set", "mute", "bank", "scene"].contains(&a.as_str())) {
+    if args.first().is_some_and(|a| REMOTE_COMMANDS.contains(&a.as_str())) {
         if let Err(e) = dbus::remote(&args) {
             eprintln!("{e:#}");
             std::process::exit(1);

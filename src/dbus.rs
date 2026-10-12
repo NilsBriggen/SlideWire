@@ -17,19 +17,43 @@ fn failed(msg: impl Into<String>) -> zbus::fdo::Error {
     zbus::fdo::Error::Failed(msg.into())
 }
 
-/// Find a strip by its name ("Fader 1", case-insensitive) or channel number
-/// ("1" = "Fader 1"). Returns the group id and the strip's current state.
-fn find_strip(name: &str) -> zbus::fdo::Result<crate::engine::StripView> {
-    let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
-    let strips = shared.lock().unwrap().strips.clone();
+/// A strip by the name you gave it ("Music"), its control's name
+/// ("Knob 3"), or a number for that fader ("1" = "Fader 1"), ignoring case.
+fn pick_strip<'a>(strips: &'a [crate::engine::StripView], name: &str) -> Option<&'a crate::engine::StripView> {
     let want = name.trim().to_lowercase();
     let by_number = format!("fader {want}");
     strips
         .iter()
-        .find(|s| s.name.to_lowercase() == want)
+        .find(|s| s.label.as_deref().is_some_and(|l| l.trim().to_lowercase() == want))
+        .or_else(|| strips.iter().find(|s| s.name.to_lowercase() == want))
         .or_else(|| strips.iter().find(|s| s.name.to_lowercase() == by_number))
+}
+
+fn find_strip(name: &str) -> zbus::fdo::Result<crate::engine::StripView> {
+    let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
+    let strips = shared.lock().unwrap().strips.clone();
+    pick_strip(&strips, name)
         .cloned()
         .ok_or_else(|| failed(format!("no strip called \"{name}\" (see `slidewire strips`)")))
+}
+
+/// The key of the scene called `name`, ignoring case.
+fn find_scene(name: &str) -> zbus::fdo::Result<String> {
+    let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
+    let sh = shared.lock().unwrap();
+    let want = name.trim().to_lowercase();
+    sh.active()
+        .and_then(|p| p.scenes.keys().find(|k| k.to_lowercase() == want).cloned())
+        .ok_or_else(|| failed(format!("no scene called \"{name}\" (see `slidewire scenes`)")))
+}
+
+/// What a strip controls, for listings.
+fn strip_controls(s: &crate::engine::StripView) -> String {
+    if s.resolved.is_empty() {
+        s.targets.iter().map(|t| t.label()).collect::<Vec<_>>().join(" + ")
+    } else {
+        s.resolved.join(" + ")
+    }
 }
 
 pub const BUS_NAME: &str = crate::APP_ID;
@@ -67,11 +91,7 @@ impl Service {
         Ok(strips
             .into_iter()
             .map(|s| {
-                let what = if s.resolved.is_empty() {
-                    s.targets.iter().map(|t| t.label()).collect::<Vec<_>>().join(" + ")
-                } else {
-                    s.resolved.join(" + ")
-                };
+                let what = strip_controls(&s);
                 (s.name, (s.position * 100.0).round() as f64, s.muted, what)
             })
             .collect())
@@ -104,23 +124,122 @@ impl Service {
         Ok(want)
     }
 
+    /// Set a strip's real volume to `percent`, through its range and curve
+    /// (or change it by `percent` if `relative`). Returns the new volume.
+    fn set_level(&self, strip: String, percent: f64, relative: bool) -> zbus::fdo::Result<f64> {
+        let s = find_strip(&strip)?;
+        let now = s.range.volume(s.position) as f64 * 100.0;
+        let target = if relative { now + percent } else { percent };
+        let vol = (target / 100.0).clamp(s.range.min as f64, s.range.top as f64) as f32;
+        let pos = s.range.position(vol).clamp(0.0, 1.0);
+        let _ = self.tx.send(Event::Ui(UiCmd::SetGroupPosition(s.id, pos)));
+        Ok((s.range.volume(pos) * 100.0).round() as f64)
+    }
+
     /// Switch to bank `bank` (1 = first).
     fn bank(&self, bank: u32) -> zbus::fdo::Result<()> {
-        if bank == 0 {
-            return Err(failed("banks start at 1"));
+        let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
+        let count = shared.lock().unwrap().active().map_or(1, |p| p.bank_count());
+        if bank == 0 || bank as usize > count {
+            let banks = if count == 1 { "1 bank".to_string() } else { format!("{count} banks") };
+            return Err(failed(format!("there is no bank {bank}; this profile has {banks}")));
         }
         let _ = self.tx.send(Event::Ui(UiCmd::SetBank(bank as usize - 1)));
         Ok(())
     }
 
     fn scene(&self, name: String) -> zbus::fdo::Result<()> {
-        let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
-        let exists = shared.lock().unwrap().active().is_some_and(|p| p.scenes.contains_key(&name));
-        if !exists {
-            return Err(failed(format!("no scene called \"{name}\"")));
-        }
+        let name = find_scene(&name)?;
         let _ = self.tx.send(Event::Ui(UiCmd::RecallScene(name)));
         Ok(())
+    }
+
+    /// Save the strips as a scene (replacing one of the same name).
+    fn save_scene(&self, name: String) -> zbus::fdo::Result<()> {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return Err(failed("a scene needs a name"));
+        }
+        let _ = self.tx.send(Event::Ui(UiCmd::SaveScene(name)));
+        Ok(())
+    }
+
+    /// Switch to the profile with this name or id.
+    fn profile(&self, name: String) -> zbus::fdo::Result<String> {
+        let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
+        let want = name.trim().to_lowercase();
+        let found = {
+            let sh = shared.lock().unwrap();
+            sh.store
+                .profiles
+                .iter()
+                .find(|(id, p)| p.name.to_lowercase() == want || id.to_lowercase() == want)
+                .map(|(id, p)| (id.clone(), p.name.clone()))
+        };
+        let (id, pname) =
+            found.ok_or_else(|| failed(format!("no profile called \"{name}\" (see `slidewire profiles`)")))?;
+        let _ = self.tx.send(Event::Ui(UiCmd::ActivateProfile(id)));
+        Ok(pname)
+    }
+
+    /// The default microphone: "on" mutes, "off" unmutes, "toggle".
+    /// Returns whether it is now muted.
+    fn mic(&self, mode: String) -> zbus::fdo::Result<bool> {
+        let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
+        let muted = {
+            let sh = shared.lock().unwrap();
+            sh.audio.sources.iter().find(|d| d.name == sh.audio.default_source).map(|d| d.mute)
+        };
+        let muted = muted.ok_or_else(|| failed("there is no microphone"))?;
+        let want = match mode.as_str() {
+            "on" => true,
+            "off" => false,
+            "toggle" | "" => !muted,
+            other => return Err(failed(format!("mic mode must be on, off or toggle, not \"{other}\""))),
+        };
+        if want != muted {
+            let _ = self.tx.send(Event::Ui(UiCmd::ToggleMicMute));
+        }
+        Ok(want)
+    }
+
+    /// Everything a script or status bar wants to show, as JSON.
+    fn state(&self) -> zbus::fdo::Result<String> {
+        let shared = SHARED.get().ok_or_else(|| failed("not ready"))?;
+        let sh = shared.lock().unwrap();
+        let active = sh.active_id();
+        let profile = sh.active();
+        let strips: Vec<_> = sh
+            .strips
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "name": s.name,
+                    "label": s.label,
+                    "position": (s.position * 100.0).round(),
+                    "volume": (s.range.volume(s.position) * 100.0).round(),
+                    "muted": s.muted,
+                    "controls": strip_controls(s),
+                })
+            })
+            .collect();
+        let profiles: Vec<_> = sh
+            .store
+            .profiles
+            .iter()
+            .map(|(id, p)| serde_json::json!({ "id": id, "name": p.name, "active": Some(id) == active.as_ref() }))
+            .collect();
+        let mic = sh.audio.sources.iter().find(|d| d.name == sh.audio.default_source);
+        let state = serde_json::json!({
+            "profile": profile.map(|p| p.name.clone()),
+            "profiles": profiles,
+            "bank": profile.map_or(1, |p| p.bank + 1),
+            "banks": profile.map_or(1, |p| p.bank_count()),
+            "scenes": profile.map(|p| p.scenes.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
+            "strips": strips,
+            "mic": mic.map(|d| serde_json::json!({ "name": d.label, "muted": d.mute })),
+        });
+        Ok(state.to_string())
     }
 }
 
@@ -136,7 +255,7 @@ pub fn bus_name() -> String {
     }
 }
 
-/// `slidewire strips|set|mute|bank|scene ...`: talk to the running app.
+/// `slidewire strips|set|mute|bank|scene|...`: talk to the running app.
 pub fn remote(args: &[String]) -> Result<()> {
     let conn = Connection::session().context("no session bus")?;
     let name = bus_name();
@@ -151,17 +270,41 @@ pub fn remote(args: &[String]) -> Result<()> {
             e => e.into(),
         })
     };
-    let arg = |i: usize, what: &str| args.get(i).cloned().with_context(|| format!("missing {what}"));
+    let json = args.iter().any(|a| a == "--json");
+    let real = args.iter().any(|a| a == "--volume");
+    let args: Vec<&String> = args.iter().filter(|a| *a != "--json" && *a != "--volume").collect();
+    let arg = |i: usize, what: &str| args.get(i).map(|s| s.to_string()).with_context(|| format!("missing {what}"));
+    let state = || -> Result<serde_json::Value> {
+        let reply = call("State", &())?;
+        let text: String = reply.body().deserialize()?;
+        Ok(serde_json::from_str(&text)?)
+    };
+    // Ignore write errors: `slidewire strips | head` closes the pipe early.
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_string();
     match args[0].as_str() {
+        "state" => {
+            let _ = writeln!(out, "{}", state()?);
+        }
         "strips" => {
-            let reply = call("Strips", &())?;
-            let strips: Vec<(String, f64, bool, String)> = reply.body().deserialize()?;
-            // Ignore write errors: `slidewire strips | head` closes the pipe early.
-            use std::io::Write;
-            let mut out = std::io::stdout().lock();
-            for (name, pct, muted, what) in strips {
-                let state = if muted { "muted".to_string() } else { format!("{pct:>3.0}%") };
-                let _ = writeln!(out, "{name:<12} {state:>6}  {}", if what.is_empty() { "-" } else { &what });
+            let st = state()?;
+            if json {
+                let _ = writeln!(out, "{}", st["strips"]);
+                return Ok(());
+            }
+            for s in st["strips"].as_array().into_iter().flatten() {
+                let state = if s["muted"].as_bool() == Some(true) {
+                    "muted".to_string()
+                } else {
+                    format!("{:>3}%", s["volume"])
+                };
+                let name = match s["label"].as_str() {
+                    Some(l) => format!("{} ({l})", text(&s["name"])),
+                    None => text(&s["name"]),
+                };
+                let what = text(&s["controls"]);
+                let _ = writeln!(out, "{name:<20} {state:>6}  {}", if what.is_empty() { "-" } else { &what });
             }
         }
         "set" => {
@@ -169,23 +312,68 @@ pub fn remote(args: &[String]) -> Result<()> {
             let value = arg(2, "volume (50, +5 or -5)")?;
             let relative = value.starts_with('+') || value.starts_with('-');
             let pct: f64 = value.trim_end_matches('%').parse().context("volume must be a number like 50, +5 or -5")?;
-            let reply = call("SetVolume", &(strip.as_str(), pct, relative))?;
+            let method = if real { "SetLevel" } else { "SetVolume" };
+            let reply = call(method, &(strip.as_str(), pct, relative))?;
             let now: f64 = reply.body().deserialize()?;
-            println!("{strip}: {now:.0}%");
+            let _ = writeln!(out, "{strip}: {now:.0}%");
         }
         "mute" => {
             let strip = arg(1, "strip name")?;
-            let mode = args.get(2).cloned().unwrap_or_else(|| "toggle".into());
+            let mode = args.get(2).map(|s| s.to_string()).unwrap_or_else(|| "toggle".into());
             let reply = call("Mute", &(strip.as_str(), mode.as_str()))?;
             let muted: bool = reply.body().deserialize()?;
-            println!("{strip}: {}", if muted { "muted" } else { "unmuted" });
+            let _ = writeln!(out, "{strip}: {}", if muted { "muted" } else { "unmuted" });
+        }
+        "mic" => {
+            let mode = args.get(1).map(|s| s.to_string()).unwrap_or_else(|| "toggle".into());
+            let reply = call("Mic", &(mode.as_str(),))?;
+            let muted: bool = reply.body().deserialize()?;
+            let _ = writeln!(out, "microphone: {}", if muted { "muted" } else { "on" });
         }
         "bank" => {
             let n: u32 = arg(1, "bank number")?.parse().context("bank must be a number")?;
             call("Bank", &(n,))?;
         }
+        "banks" => {
+            let st = state()?;
+            if json {
+                let _ = writeln!(out, "{}", serde_json::json!({ "bank": st["bank"], "banks": st["banks"] }));
+            } else {
+                let _ = writeln!(out, "bank {} of {}", st["bank"], st["banks"]);
+            }
+        }
+        "scene" if args.get(1).is_some_and(|a| *a == "save") => {
+            let name = args[2..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+            call("SaveScene", &(name.as_str(),))?;
+        }
         "scene" => {
             call("Scene", &(arg(1, "scene name")?.as_str(),))?;
+        }
+        "scenes" => {
+            let st = state()?;
+            if json {
+                let _ = writeln!(out, "{}", st["scenes"]);
+            } else {
+                for s in st["scenes"].as_array().into_iter().flatten() {
+                    let _ = writeln!(out, "{}", text(s));
+                }
+            }
+        }
+        "profile" => {
+            let reply = call("Profile", &(arg(1, "profile name")?.as_str(),))?;
+            let name: String = reply.body().deserialize()?;
+            let _ = writeln!(out, "profile: {name}");
+        }
+        "profiles" => {
+            let st = state()?;
+            if json {
+                let _ = writeln!(out, "{}", st["profiles"]);
+            } else {
+                for p in st["profiles"].as_array().into_iter().flatten() {
+                    let mark = if p["active"].as_bool() == Some(true) { "*" } else { " " };
+                    let _ = writeln!(out, "{mark} {}", text(&p["name"]));
+                }
+            }
         }
         other => anyhow::bail!("unknown command {other}"),
     }
@@ -535,5 +723,30 @@ impl Osd {
     /// A text-only pop-up (bank and scene changes).
     pub fn show_text(&self, icon: &str, text: &str) {
         let _ = self.tx.try_send((icon.to_string(), -1, text.to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::StripView;
+
+    #[test]
+    fn strips_by_label_name_or_number() {
+        let strip = |name: &str, label: Option<&str>| StripView {
+            id: name.into(),
+            name: name.into(),
+            label: label.map(String::from),
+            ..Default::default()
+        };
+        let strips = [strip("Fader 1", Some("Music")), strip("Fader 2", None), strip("Knob 3", Some("Fader 2"))];
+        let pick = |n: &str| pick_strip(&strips, n).map(|s| s.id.as_str());
+        assert_eq!(pick("music"), Some("Fader 1"));
+        assert_eq!(pick(" MUSIC "), Some("Fader 1"));
+        assert_eq!(pick("knob 3"), Some("Knob 3"));
+        assert_eq!(pick("1"), Some("Fader 1"));
+        // A strip the user named "Fader 2" wins over the control of that name.
+        assert_eq!(pick("fader 2"), Some("Knob 3"));
+        assert_eq!(pick("drums"), None);
     }
 }
