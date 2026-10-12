@@ -68,17 +68,20 @@ The **Mixer** page looks like a console:
 - faders and knobs can be dragged, scrolled, or double-clicked to jump to 100%
 - each app in the Sources panel has a **Play on…** menu to move it to another output
 - **Banks**: the tabs above the console. Each bank has its own assignments, so 8 faders can control 16, 24, ... things.
-- **Scenes**: save every strip's volume and mute under a name, and recall it from the Scenes menu, a button or the tray.
+- **Scenes**: save every strip's volume and mute under a name, and recall it from the Scenes menu, a button or the tray. A scene can glide in over a few seconds instead of jumping (its **⋯** menu, where you can also rename it). Buttons can step to the next or previous scene.
 - **Master**: a fixed strip at the right end controls the default output; click its display to switch outputs. It appears when the window is wide enough.
 - Right-click a strip to **name** it, give it a **colour** (a band on top, its glow and its display), pick an **icon**, or **clear** it.
 - Faders are marked in dB. Each strip can also have its own range, e.g. a mic that never goes below 40%, and its own curve.
+- **Balance**: pan a strip's apps and devices left or right from its menu, or give a knob the Balance role on the Controller page. Moving a fader keeps any balance, including one set in pavucontrol.
+- **Swap with…** in a strip's menu trades everything on two strips.
+- A strip glows when you touch its control on the hardware, so you can see which one it is.
 - **Ducking**: set a strip (Discord, say) to "Turn other apps down while this plays". Music on the other strips then dips by the amount you choose whenever it plays, and comes back after.
-- In the Sources panel, an app with several streams (a game, a browser) gets one row. A filter box appears when the list is long.
+- In the Sources panel, an app with several streams (a game, a browser) gets one row, and each row says which strip controls it. **Unassigned** hides those already on a strip. A filter box appears when the list is long.
 - **Buses**: virtual outputs such as Game, Chat or Music, added in the Sources panel. Put apps on a bus with their **Play on…** menu, then one fader controls them all. Each bus plays on an output you choose. Buses stay in place when Slidewire quits, so the sound keeps flowing.
 - **Always play here**: tick it in an app's **Play on…** menu, and the app goes back to that device whenever it starts.
 - **Learn controls**: in a strip's menu, point its fader or buttons at different controls by touching them.
 
-Mistakes are cheap: removing an assignment, clearing a strip, deleting a scene and recalling a scene all show a toast with **Undo**. **Ctrl+Z** / **Ctrl+Shift+Z** step through changes to assignments and the profile.
+Mistakes are cheap: removing an assignment, clearing or swapping a strip, deleting, overwriting and recalling a scene all show a toast with **Undo**. **Ctrl+Z** / **Ctrl+Shift+Z** step through changes to assignments and the profile.
 
 **Keyboard** (F1 shows the list):
 - **Ctrl+1…6** switch pages
@@ -169,21 +172,25 @@ Running `slidewire` while it's already running brings the window up.
 Control the running app, for scripts and keyboard shortcuts:
 
 ```
-slidewire strips                     list strips with volume and assignment
-slidewire set STRIP 50|+5|-5         set or change a strip's volume (percent)
+slidewire strips [--json]            list strips with volume and assignment
+slidewire set STRIP 50|+5|-5         set or change a strip's fader position (percent)
+slidewire set STRIP 50 --volume      set the volume itself, through the strip's range
 slidewire mute STRIP [on|off|toggle]
-slidewire bank N
-slidewire scene NAME
+slidewire mic [on|off|toggle]        the default microphone
+slidewire bank N | banks [--json]
+slidewire scene NAME | scene save NAME | scenes [--json]
+slidewire profile NAME | profiles [--json]
+slidewire state                      everything as one JSON object, for status bars
 ```
 
-`STRIP` is a strip name like `"Knob 3"`, or a number for that fader.
+`STRIP` is the name you gave a strip (`"Music"`), a control name like `"Knob 3"`, or a number for that fader. Names ignore case.
 
 The full reference is in `man slidewire`; bash, zsh and fish complete the commands.
 
 ## Files
 
 - `~/.config/slidewire/settings.json`
-- `~/.config/slidewire/profiles/*.json` (plain JSON in the same format as the Windows app, plus `assignments`, `banks`, `scenes` and `buttons`)
+- `~/.config/slidewire/profiles/*.json` (plain JSON in the same format as the Windows app, plus `assignments`, `banks`, `scenes` and `buttons`). **Profiles → Export** saves one whole, to share or keep, or as a MIDI Mixer `spec.json`.
 - every save keeps the previous version as `*.json.bak`; a settings file that can't be read is kept as `settings.json.broken`
 
 Other details:

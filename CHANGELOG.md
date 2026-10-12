@@ -4,6 +4,31 @@ All notable changes to Slidewire. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Translations: German, French, Spanish, Italian, Portuguese (Brazil), Polish, Hungarian, Russian, Chinese (Simplified), Japanese, Korean and Bärndütsch, with a language picker under Settings → Appearance. Chinese, Japanese and Korean use the desktop's CJK font.
+- Balance: a strip can pan its apps and devices left or right, from its menu or with a knob given the new Balance role.
+- Scenes can glide in over 0.5 to 5 seconds, be renamed, and be stepped through with a previous/next scene button. A scene button's LED is lit while its scene is the last one recalled.
+- Swap with… trades everything on two strips.
+- The sources panel shows which strip controls each app and device, and can hide those already on one.
+- A strip glows when its control on the hardware moves.
+- The window opens at its last size (and, on X11, position).
+- Export a whole Slidewire profile (assignments, banks, scenes, buttons, focus rules) as well as MIDI Mixer's spec.json.
+- Command line: `mic`, `banks`, `scenes`, `scene save`, `profile`, `profiles` and `state`; `--json` output; `set --volume` for the volume itself rather than the fader position. Strips can be named by the label you gave them.
+- Shortcuts: PgUp/PgDn switch banks, Ctrl+Shift+M mutes the microphone.
+- The connection check and the log are translated.
+
+### Fixed
+- Moving a fader no longer resets an app's or device's left/right balance.
+- Removing a bank left scenes and focus rules pointing at the wrong bank.
+- Saving a scene under an existing name replaced it without asking.
+- The mute pop-up could show the turned-down volume while ducking.
+- Key combinations could not use the plus key (`ctrl++` or `ctrl+plus` now work).
+- OBS addresses can be a plain host or host:port; `wss://` gets a clear message.
+- `slidewire bank N` accepted banks that don't exist.
+- Hints in menus were spread out letter by letter.
+
 ## [1.0.0] - 2026-10-11
 
 The first release.
