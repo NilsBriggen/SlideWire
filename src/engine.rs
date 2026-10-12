@@ -436,13 +436,13 @@ impl Engine {
                     self.routed.clear();
                     self.balanced.clear();
                     if st.connected {
-                        sh.log("Connected to the sound server");
+                        sh.log(t!("Connected to the sound server"));
                         // Monitors left behind by a crash: off is the safe state.
                         for m in crate::routing::all_monitors(&st) {
                             self.audio.send(AudioCmd::UnloadModule(m.index));
                         }
                     } else {
-                        sh.warn("Lost the sound server; reconnecting");
+                        sh.warn(t!("Lost the sound server; reconnecting"));
                     }
                 }
                 sh.audio = Arc::new(st);
@@ -494,7 +494,7 @@ impl Engine {
                     let name = sh.store.profiles[&id].name.clone();
                     sh.store.settings.active_profile = Some(id);
                     sh.store.touch_settings();
-                    sh.log(format!("Switched to profile \"{name}\" (device connected)"));
+                    sh.log(t!("Switched to profile \"%{name}\" (device connected)", name = name));
                     sh.notify(Notice::ProfileSwitched(name));
                 }
             }
@@ -536,7 +536,7 @@ impl Engine {
                         self.input = Some(c);
                         sh.connected_in = Some(port.clone());
                         sh.midi_error = None;
-                        sh.log(format!("Connected input {port}"));
+                        sh.log(t!("Connected input %{port}", port = port));
                         sh.notify(Notice::Connected(midi::display_name(port)));
                     }
                     Err(e) => {
@@ -558,7 +558,7 @@ impl Engine {
                     Ok(c) => {
                         self.output = Some(c);
                         sh.connected_out = Some(port.clone());
-                        sh.log(format!("Connected output {port}"));
+                        sh.log(t!("Connected output %{port}", port = port));
                     }
                     Err(e) => sh.warn(format!("{e:#}")),
                 }
@@ -624,7 +624,7 @@ impl Engine {
                 let name = c.name.clone();
                 sh.learn = None;
                 sh.store.touch(&id);
-                sh.log(format!("Learned {}", msg.describe()));
+                sh.log(t!("Learned %{message}", message = msg.describe()));
                 sh.notify(Notice::Info(
                     t!("%{control} is now %{address}", control = name, address = msg.address()).to_string(),
                 ));
@@ -739,13 +739,13 @@ impl Engine {
                 let shared = self.shared.clone();
                 std::thread::spawn(move || {
                     if let Err(e) = crate::dbus::media(key, &player) {
-                        shared.lock().unwrap().warn(format!("Media key: {e:#}"));
+                        shared.lock().unwrap().warn(t!("Media key: %{error}", error = format!("{e:#}")));
                     }
                 });
             }
             ButtonAction::Command { command } => {
                 if let Err(e) = crate::actions::run_command(command) {
-                    self.shared.lock().unwrap().warn(format!("Command: {e:#}"));
+                    self.shared.lock().unwrap().warn(t!("Command: %{error}", error = format!("{e:#}")));
                 }
             }
             ButtonAction::Keys { keys } => {
@@ -753,7 +753,7 @@ impl Engine {
                 let shared = self.shared.clone();
                 std::thread::spawn(move || {
                     if let Err(e) = crate::actions::press_keys(&keys) {
-                        shared.lock().unwrap().warn(format!("Keys: {e:#}"));
+                        shared.lock().unwrap().warn(t!("Keys: %{error}", error = format!("{e:#}")));
                     }
                 });
             }
@@ -861,7 +861,7 @@ impl Engine {
         let Some(id) = sh.active_id() else { return };
         let p = sh.store.profiles.get_mut(&id).unwrap();
         if p.bank_count() < 2 {
-            sh.log("Only one bank. Add banks above the console on the Mixer page.");
+            sh.log(t!("Only one bank. Add banks above the console on the Mixer page."));
             return;
         }
         let new = match bank {
@@ -873,7 +873,7 @@ impl Engine {
         };
         sh.store.touch(&id);
         let osd = sh.store.settings.osd;
-        sh.log(format!("Bank {}", new + 1));
+        sh.log(t!("Bank %{bank}", bank = new + 1));
         if step != 0 {
             // From a button on the controller; the window shows bank tabs anyway.
             sh.notify(Notice::Bank(new));
@@ -938,20 +938,20 @@ impl Engine {
         let Some(id) = sh.active_id() else { return };
         sh.store.profiles.get_mut(&id).unwrap().scenes.insert(name.to_string(), scene);
         sh.store.touch(&id);
-        sh.log(format!("Saved scene \"{name}\""));
+        sh.log(t!("Saved scene \"%{name}\"", name = name));
     }
 
     fn recall_scene(&mut self, name: &str) {
         let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
         let Some(scene) = profile.scenes.get(name).cloned() else {
-            self.shared.lock().unwrap().warn(format!("No scene called \"{name}\""));
+            self.shared.lock().unwrap().warn(t!("No scene called \"%{name}\"", name = name));
             return;
         };
         self.scene_undo = Some(self.snapshot(&profile));
         self.last_scene = Some(name.to_string());
         self.apply_scene(&scene);
         let mut sh = self.shared.lock().unwrap();
-        sh.log(format!("Recalled scene \"{name}\""));
+        sh.log(t!("Recalled scene \"%{name}\"", name = name));
         sh.notify(Notice::SceneRecalled(name.to_string()));
         drop(sh);
         if self.shared.lock().unwrap().store.settings.osd {
@@ -1445,7 +1445,11 @@ impl Engine {
                     AutoAction::Bank { bank } => self.set_bank(Some(*bank), 0),
                     AutoAction::Scene { name } => self.recall_scene(name),
                 }
-                self.shared.lock().unwrap().log(format!("{} has focus: {}", rule.label, describe_auto(&rule.action)));
+                self.shared.lock().unwrap().log(t!(
+                    "%{app} has focus: %{action}",
+                    app = rule.label,
+                    action = describe_auto(&rule.action)
+                ));
                 self.auto_active = Some((i, undo));
             }
             // Wait a moment: alt-tabbing through other windows shouldn't flip back and forth.
@@ -1580,7 +1584,7 @@ impl Engine {
         } else {
             let focus = sh.focus.clone();
             let Some(pid) = focus.pid else {
-                sh.warn("Assign: no focused window known");
+                sh.warn(t!("Assign: no focused window known"));
                 return;
             };
             let stream = sh.audio.apps.iter().find(|a| self.related_to_focus_uncached(pid, a)).cloned();

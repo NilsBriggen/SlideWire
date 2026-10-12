@@ -3,6 +3,8 @@
 
 use std::path::Path;
 
+use rust_i18n::t;
+
 use crate::midi;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -32,7 +34,11 @@ pub fn diagnose(pattern: &str, seq_ports: &[String]) -> Vec<Check> {
         out.push(c);
     }
     if pattern.is_empty() {
-        out.push(check(Status::Fail, "No MIDI input set", "Set the profile's MIDI input on the Controller page."));
+        out.push(check(
+            Status::Fail,
+            t!("No MIDI input set"),
+            t!("Set the profile's MIDI input on the Controller page."),
+        ));
         return out;
     }
 
@@ -41,20 +47,20 @@ pub fn diagnose(pattern: &str, seq_ports: &[String]) -> Vec<Check> {
     let raw_match = raw.iter().find(|r| matches(&r.name, pattern));
     let seq_match = seq_ports.iter().find(|p| matches(p, pattern) && !p.contains("[raw hw:"));
     if let (Some(p), None) = (seq_match, raw_match) {
-        out.push(check(Status::Ok, "Software MIDI port", format!("{p} (not a hardware device)")));
+        out.push(check(Status::Ok, t!("Software MIDI port"), t!("%{port} (not a hardware device)", port = p)));
         return out;
     }
 
     let usb = usb_products(Path::new("/sys/bus/usb/devices"));
     let usb_match = usb.iter().find(|p| matches(p, pattern));
     out.push(match usb_match {
-        Some(name) => check(Status::Ok, "Connected over USB", name.clone()),
+        Some(name) => check(Status::Ok, t!("Connected over USB"), name.clone()),
         None => check(
             Status::Warn,
-            "Not found on USB",
-            format!(
-                "No USB device is named like \"{pattern}\". Check the cable and try another port; \
-                 avoid unpowered hubs. (Devices on other buses, or with a different USB name, can still work.)"
+            t!("Not found on USB"),
+            t!(
+                "No USB device is named like \"%{pattern}\". Check the cable and try another port; avoid unpowered hubs. (Devices on other buses, or with a different USB name, can still work.)",
+                pattern = pattern
             ),
         ),
     });
@@ -62,33 +68,46 @@ pub fn diagnose(pattern: &str, seq_ports: &[String]) -> Vec<Check> {
     out.push(match raw_match {
         Some(r) => check(
             Status::Ok,
-            "Sound driver loaded",
-            format!("{} is ALSA card {}, MIDI device hw:{},{}", r.name, r.card, r.card, r.device),
+            t!("Sound driver loaded"),
+            t!(
+                "%{name} is ALSA card %{card}, MIDI device hw:%{card},%{device}",
+                name = r.name,
+                card = r.card,
+                device = r.device
+            ),
         ),
         None if usb_match.is_some() => check(
             Status::Fail,
-            "No sound driver for it",
-            "The device is on USB but has no ALSA MIDI device. The snd-usb-audio driver may have failed to load; \
-             replug it, and see `journalctl -k` for errors.",
+            t!("No sound driver for it"),
+            t!(
+                "The device is on USB but has no ALSA MIDI device. The snd-usb-audio driver may have failed to load; replug it, and see `journalctl -k` for errors."
+            ),
         ),
-        None => check(Status::Fail, "No ALSA MIDI device", format!("No MIDI device named like \"{pattern}\".")),
+        None => check(
+            Status::Fail,
+            t!("No ALSA MIDI device"),
+            t!("No MIDI device named like \"%{pattern}\".", pattern = pattern),
+        ),
     });
 
     let seq_available = Path::new("/proc/asound/seq/clients").exists();
     out.push(match (seq_match, seq_available) {
-        (Some(p), _) => check(Status::Ok, "In the ALSA sequencer", p.clone()),
+        (Some(p), _) => check(Status::Ok, t!("In the ALSA sequencer"), p.clone()),
         (None, false) => check(
             Status::Warn,
-            "ALSA sequencer unavailable",
-            "The snd-seq module isn't loaded, so other MIDI apps won't see the device. Slidewire uses the raw port instead.",
+            t!("ALSA sequencer unavailable"),
+            t!(
+                "The snd-seq module isn't loaded, so other MIDI apps won't see the device. Slidewire uses the raw port instead."
+            ),
         ),
         (None, true) if raw_match.is_some() => check(
             Status::Warn,
-            "Missing from the ALSA sequencer",
-            "The snd-seq-midi bridge didn't pick the device up, so most MIDI apps won't see it. \
-             Slidewire uses the raw port instead.",
+            t!("Missing from the ALSA sequencer"),
+            t!(
+                "The snd-seq-midi bridge didn't pick the device up, so most MIDI apps won't see it. Slidewire uses the raw port instead."
+            ),
         ),
-        (None, true) => check(Status::Fail, "Missing from the ALSA sequencer", "No sequencer port matches."),
+        (None, true) => check(Status::Fail, t!("Missing from the ALSA sequencer"), t!("No sequencer port matches.")),
     });
     out
 }
@@ -96,9 +115,11 @@ pub fn diagnose(pattern: &str, seq_ports: &[String]) -> Vec<Check> {
 /// The running app's own connection state.
 pub fn connection(connected: Option<&str>, error: Option<&str>) -> Check {
     match (connected, error) {
-        (Some(port), _) => check(Status::Ok, "Slidewire is connected", port.to_string()),
-        (None, Some(e)) => check(Status::Fail, "Slidewire couldn't connect", busy_hint(e)),
-        (None, None) => check(Status::Warn, "Not connected yet", "Slidewire looks for the device every 2 seconds."),
+        (Some(port), _) => check(Status::Ok, t!("Slidewire is connected"), port.to_string()),
+        (None, Some(e)) => check(Status::Fail, t!("Slidewire couldn't connect"), busy_hint(e)),
+        (None, None) => {
+            check(Status::Warn, t!("Not connected yet"), t!("Slidewire looks for the device every 2 seconds."))
+        }
     }
 }
 
@@ -108,9 +129,10 @@ fn matches(name: &str, pattern: &str) -> bool {
 
 fn busy_hint(e: &str) -> String {
     if e.contains("busy") || e.contains("EBUSY") || e.contains("os error 16") {
-        format!("{e}. Another app has the device open exclusively; close it and Slidewire reconnects.")
+        t!("%{error}. Another app has the device open exclusively; close it and Slidewire reconnects.", error = e)
+            .to_string()
     } else if e.contains("ermission") || e.contains("os error 13") {
-        format!("{e}. Your user may need to be in the \"audio\" group.")
+        t!("%{error}. Your user may need to be in the \"audio\" group.", error = e).to_string()
     } else {
         e.to_string()
     }
@@ -128,11 +150,11 @@ fn kernel_check(osrelease: &Path, modules: &Path) -> Option<Check> {
         std::fs::read_dir(modules).ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     Some(check(
         Status::Fail,
-        "Restart needed after a kernel update",
-        format!(
-            "You're running kernel {release}, but only {} is installed, so new devices can't load their drivers. \
-             Restart your computer.",
-            if installed.is_empty() { "another version".to_string() } else { installed.join(", ") }
+        t!("Restart needed after a kernel update"),
+        t!(
+            "You're running kernel %{release}, but only %{installed} is installed, so new devices can't load their drivers. Restart your computer.",
+            release = release,
+            installed = if installed.is_empty() { t!("another version").to_string() } else { installed.join(", ") }
         ),
     ))
 }

@@ -77,6 +77,7 @@ CONTROL THE RUNNING APP (for scripts and keyboard shortcuts):
 ";
 
 fn main() {
+    i18n::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| REMOTE_COMMANDS.contains(&a.as_str())) {
         if let Err(e) = dbus::remote(&args) {
@@ -172,7 +173,6 @@ fn main() {
     }
 
     install_panic_hook();
-    i18n::init();
     // Handle SIGTERM/SIGINT/SIGHUP on one thread (blocked everywhere else,
     // which threads spawned from here inherit).
     let signals = block_quit_signals();
