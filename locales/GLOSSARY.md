@@ -11,6 +11,9 @@ values translated: `"Hide sources": "Quellen ausblenden"`.
 
 ## Rules
 
+Writing Bärndütsch (`gsw.json`)? Read [BAERNDUETSCH.md](BAERNDUETSCH.md) first.
+
+
 - Keep every key exactly as it is; translate only the values. Same keys, no
   extra ones.
 - Keep `%{name}` placeholders exactly (same names, same count); move them
