@@ -619,7 +619,13 @@ pub fn combo(id_salt: impl std::hash::Hash + std::fmt::Debug) -> egui::ComboBox 
 
 /// Hint text in a faint colour.
 pub fn hint(ui: &mut Ui, text: &str) -> Response {
-    ui.label(egui::RichText::new(text).size(12.5).color(pal().text_dim))
+    // Menus lay out justified, which would spread wrapped text out letter by letter.
+    let job = egui::RichText::new(text).size(12.5).color(pal().text_dim);
+    if ui.layout().horizontal_justify() {
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| ui.label(job)).inner
+    } else {
+        ui.label(job)
+    }
 }
 
 /// A row of mutually exclusive options in one rounded track.
