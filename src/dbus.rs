@@ -297,7 +297,7 @@ pub fn remote(args: &[String]) -> Result<()> {
                 let state = if s["muted"].as_bool() == Some(true) {
                     "muted".to_string()
                 } else {
-                    format!("{:>3}%", s["volume"])
+                    format!("{:>3.0}%", s["volume"].as_f64().unwrap_or_default())
                 };
                 let name = match s["label"].as_str() {
                     Some(l) => format!("{} ({l})", text(&s["name"])),

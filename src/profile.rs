@@ -185,10 +185,11 @@ pub enum Role {
     Run,
     RunIndicators,
     Meters,
+    Balance,
 }
 
 impl Role {
-    pub const ALL: [Role; 9] = [
+    pub const ALL: [Role; 10] = [
         Role::Faders,
         Role::Indicators,
         Role::Mute,
@@ -198,6 +199,7 @@ impl Role {
         Role::Run,
         Role::RunIndicators,
         Role::Meters,
+        Role::Balance,
     ];
     pub fn label(self) -> String {
         match self {
@@ -210,12 +212,13 @@ impl Role {
             Role::Run => t!("Run / default").into(),
             Role::RunIndicators => t!("Run indicator").into(),
             Role::Meters => t!("Peak meter").into(),
+            Role::Balance => t!("Balance").into(),
         }
     }
     /// Which control kind is expected for this role.
     pub fn wants(self) -> ControlKind {
         match self {
-            Role::Faders => ControlKind::Fader,
+            Role::Faders | Role::Balance => ControlKind::Fader,
             Role::Mute | Role::Assign | Role::Run => ControlKind::Button,
             _ => ControlKind::Output,
         }
@@ -245,6 +248,9 @@ pub struct Group {
     pub run_indicators: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub meters: Vec<String>,
+    /// Knobs that pan the strip left and right.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub balance: Vec<String>,
     #[serde(flatten)]
     pub extra: IndexMap<String, Value>,
 }
@@ -261,6 +267,7 @@ impl Group {
             Role::Run => &self.run,
             Role::RunIndicators => &self.run_indicators,
             Role::Meters => &self.meters,
+            Role::Balance => &self.balance,
         }
     }
     pub fn role_mut(&mut self, r: Role) -> &mut Vec<String> {
@@ -274,6 +281,7 @@ impl Group {
             Role::Run => &mut self.run,
             Role::RunIndicators => &mut self.run_indicators,
             Role::Meters => &mut self.meters,
+            Role::Balance => &mut self.balance,
         }
     }
     pub fn uses(&self, control_id: &str) -> bool {
@@ -467,6 +475,10 @@ pub struct GroupSettings {
     /// While this strip plays, turn the apps on other strips down.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duck: Option<Duck>,
+    /// Left/right balance of this strip's streams, -1 to 1; unset leaves
+    /// them as they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -503,6 +515,7 @@ impl Default for GroupSettings {
             color: None,
             icon: None,
             duck: None,
+            balance: None,
         }
     }
 }

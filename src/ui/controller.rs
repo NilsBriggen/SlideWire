@@ -339,7 +339,7 @@ fn message_summary(c: &Control) -> String {
 
 fn role_color(r: Role) -> egui::Color32 {
     match r {
-        Role::Faders | Role::Indicators | Role::Meters => pal().accent,
+        Role::Faders | Role::Indicators | Role::Meters | Role::Balance => pal().accent,
         Role::Mute | Role::MuteIndicators => MUTE,
         Role::Assign | Role::AssignIndicators => ASSIGN,
         Role::Run | Role::RunIndicators => RUN,

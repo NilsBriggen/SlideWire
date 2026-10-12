@@ -272,6 +272,8 @@ pub struct Engine {
     /// Streams the remembered routes were applied to (once each, so the
     /// user can still move them by hand).
     routed: HashSet<(Kind, u32)>,
+    /// The balance last given to each stream or device by its strip.
+    balanced: HashMap<(Kind, u32), f32>,
     /// Focus rule in effect: its index and what to go back to.
     auto_active: Option<(usize, AutoUndo)>,
     /// When to go back, after focus left the rule's app.
@@ -323,6 +325,7 @@ impl Engine {
             save_error: None,
             module_pending: HashMap::new(),
             routed: HashSet::new(),
+            balanced: HashMap::new(),
             auto_active: None,
             auto_restore_at: None,
         }
@@ -411,6 +414,7 @@ impl Engine {
                     self.meters_wanted.clear();
                     self.module_pending.clear();
                     self.routed.clear();
+                    self.balanced.clear();
                     if st.connected {
                         sh.log("Connected to the sound server");
                         // Monitors left behind by a crash: off is the safe state.
@@ -425,6 +429,7 @@ impl Engine {
                 drop(sh);
                 self.sync_buses();
                 self.apply_routes();
+                self.apply_balance();
             }
             Event::Focus(f) => {
                 self.focus_cache.clear();
@@ -625,6 +630,13 @@ impl Engine {
             }
             match input {
                 Input::Absolute(pos) => {
+                    for (gid, g) in &profile.groups {
+                        if g.balance.contains(cid) {
+                            // A little dead zone, so the middle of a knob is centred.
+                            let b = pos * 2.0 - 1.0;
+                            self.set_group_balance(gid, if b.abs() < 0.04 { 0.0 } else { b });
+                        }
+                    }
                     let pickup = !control.is_motorized() && self.shared.lock().unwrap().store.settings.pickup;
                     let last = self.hw_pos.insert(cid.clone(), pos);
                     for (gid, g) in &profile.groups {
@@ -650,6 +662,10 @@ impl Engine {
                         .unwrap_or_else(|| self.shared.lock().unwrap().store.settings.default_steps)
                         .max(1);
                     for (gid, g) in &profile.groups {
+                        if g.balance.contains(cid) {
+                            let cur = profile.current().get(gid).and_then(|a| a.balance).unwrap_or(0.0);
+                            self.set_group_balance(gid, (cur + 2.0 * clicks as f32 / steps as f32).clamp(-1.0, 1.0));
+                        }
                         if g.faders.contains(cid) {
                             let cur = self.group_position(&profile, gid);
                             let pos = (cur + clicks as f32 / steps as f32).clamp(0.0, 1.0);
@@ -1000,6 +1016,7 @@ impl Engine {
             }
             UiCmd::SetDefault(kind, name) => self.audio.send(AudioCmd::SetDefault(kind, name)),
             UiCmd::ProfileEdited => {
+                self.apply_balance();
                 let mut sh = self.shared.lock().unwrap();
                 if let Some(id) = sh.active_id() {
                     sh.store.touch(&id);
@@ -1154,6 +1171,83 @@ impl Engine {
             self.module_pending.insert(key, now);
             self.audio.send(cmd);
         }
+    }
+
+    /// Give every stream on a strip with a balance that balance. Each is
+    /// set once per value, so a change made elsewhere (pavucontrol) stays
+    /// until the strip's balance changes. Streams that leave such a strip
+    /// (or whose strip is centred again) go back to the middle.
+    fn apply_balance(&mut self) {
+        let (profile, audio) = {
+            let sh = self.shared.lock().unwrap();
+            (sh.active().cloned(), sh.audio.clone())
+        };
+        let live: HashSet<(Kind, u32)> = audio
+            .apps
+            .iter()
+            .map(|a| (Kind::SinkInput, a.index))
+            .chain(audio.app_inputs.iter().map(|a| (Kind::SourceOutput, a.index)))
+            .chain(audio.sinks.iter().map(|d| (Kind::Sink, d.index)))
+            .chain(audio.sources.iter().map(|d| (Kind::Source, d.index)))
+            .collect();
+        self.balanced.retain(|k, _| live.contains(k));
+        let Some(profile) = profile else { return };
+        // Every bank, the active one last so it wins: switching banks moves no one.
+        let others = std::iter::once(&profile.assignments)
+            .chain(&profile.banks)
+            .enumerate()
+            .filter(|(i, _)| *i != profile.bank)
+            .map(|(_, b)| b);
+        let wanted: Vec<(Vec<Target>, f32)> = others
+            .chain(std::iter::once(profile.current()))
+            .flat_map(|b| b.values())
+            .filter_map(|a| a.balance.map(|b| (a.targets.clone(), b)))
+            .collect();
+        let mut covered: HashMap<(Kind, u32), f32> = HashMap::new();
+        for (targets, balance) in wanted {
+            for r in self.resolve(&profile, &targets) {
+                covered.insert((r.kind, r.index), balance);
+            }
+        }
+        for (&(kind, index), &balance) in &covered {
+            let layout = match kind {
+                Kind::SinkInput => audio.apps.iter().find(|a| a.index == index).map(|a| &a.layout),
+                Kind::SourceOutput => audio.app_inputs.iter().find(|a| a.index == index).map(|a| &a.layout),
+                Kind::Sink => audio.sinks.iter().find(|d| d.index == index).map(|d| &d.layout),
+                Kind::Source => audio.sources.iter().find(|d| d.index == index).map(|d| &d.layout),
+            };
+            let Some(layout) = layout else { continue };
+            if self.balanced.insert((kind, index), balance) == Some(balance) {
+                continue;
+            }
+            if (layout.balance() - balance).abs() > 0.01 {
+                self.audio.send(AudioCmd::SetBalance(kind, index, balance));
+            }
+        }
+        let left: Vec<(Kind, u32)> = self.balanced.keys().filter(|k| !covered.contains_key(k)).copied().collect();
+        for (kind, index) in left {
+            if self.balanced.remove(&(kind, index)).is_some_and(|b| b != 0.0) {
+                self.audio.send(AudioCmd::SetBalance(kind, index, 0.0));
+            }
+        }
+    }
+
+    /// Pan a strip (-1 left … 1 right), from a balance knob.
+    fn set_group_balance(&mut self, gid: &str, balance: f32) {
+        {
+            let mut sh = self.shared.lock().unwrap();
+            let Some(id) = sh.active_id() else { return };
+            let Some(p) = sh.store.profiles.get_mut(&id) else { return };
+            let a = p.current_mut().entry(gid.to_string()).or_default();
+            let b = (balance.abs() > 0.005).then_some(balance);
+            if a.balance == b {
+                return;
+            }
+            a.balance = b;
+            sh.store.touch(&id);
+            sh.repaint();
+        }
+        self.apply_balance();
     }
 
     /// Move newly appeared streams to the device their app is routed to.

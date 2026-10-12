@@ -662,7 +662,7 @@ impl App {
             );
         }
         ui.menu_button(format!("{}  {}", icon::PLUS, t!("Add…")), |ui| self.target_menu(ui, &s.id, audio));
-        section_label(ui, &t!("Range"));
+        section_label(ui, &t!("Range and balance"));
         self.range_menu(ui, &s.id);
         self.identity_menu(ui, s, audio);
         self.relearn_menu(ui, &s.id);
@@ -934,9 +934,9 @@ impl App {
         let (before, global_curve) = {
             let sh = self.shared.lock().unwrap();
             let a = sh.active().and_then(|p| p.current().get(gid)).cloned().unwrap_or_default();
-            ((a.min_volume, a.max_volume, a.curve), sh.store.settings.curve)
+            ((a.min_volume, a.max_volume, a.curve, a.balance), sh.store.settings.curve)
         };
-        let (mut min, mut max, mut curve) = before;
+        let (mut min, mut max, mut curve, mut balance) = before;
         let pct = |v: f64, _: std::ops::RangeInclusive<usize>| format!("{:.0}%", v * 100.0);
         egui::Grid::new(("range", gid)).num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label(t!("Bottom"));
@@ -961,15 +961,37 @@ impl App {
                 }
             });
             ui.end_row();
+            ui.label(t!("Balance"));
+            ui.horizontal(|ui| {
+                let mut b = balance.unwrap_or(0.0);
+                let side = |v: f64, _: std::ops::RangeInclusive<usize>| {
+                    let pct = (v.abs() * 100.0).round();
+                    if pct < 1.0 {
+                        t!("Centre").to_string()
+                    } else if v < 0.0 {
+                        t!("L %{pct}", pct = pct).to_string()
+                    } else {
+                        t!("R %{pct}", pct = pct).to_string()
+                    }
+                };
+                let r = ui
+                    .add(egui::Slider::new(&mut b, -1.0..=1.0).custom_formatter(side))
+                    .on_hover_text(t!("Left and right for this strip's apps and devices. Double-click to centre."));
+                if r.double_clicked() {
+                    b = 0.0;
+                }
+                balance = (b.abs() >= 0.01).then_some(b);
+            });
+            ui.end_row();
         });
         if min > max {
             min = max;
         }
-        if (min, max, curve) != before {
+        if (min, max, curve, balance) != before {
             let gid = gid.to_string();
             self.edit_profile(|p| {
                 let a = p.current_mut().entry(gid).or_default();
-                (a.min_volume, a.max_volume, a.curve) = (min, max, curve);
+                (a.min_volume, a.max_volume, a.curve, a.balance) = (min, max, curve, balance);
             });
         }
     }

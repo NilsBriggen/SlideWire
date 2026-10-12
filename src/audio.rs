@@ -14,6 +14,7 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, Sender};
 use libpulse_binding as pa;
 use pa::callbacks::ListResult;
+use pa::channelmap::{Map as ChannelMap, Position};
 use pa::context::subscribe::{Facility, InterestMaskSet};
 use pa::context::{Context, FlagSet as CtxFlags, State as CtxState};
 use pa::mainloop::api::MainloopInnerType;
@@ -44,8 +45,90 @@ pub struct Device {
     /// 1.0 = 100%.
     pub volume: f32,
     pub mute: bool,
-    pub channels: u8,
+    pub layout: Layout,
     pub monitor_source: String,
+}
+
+/// The channels of a device or stream: each one's volume relative to the
+/// loudest (1.0), and its side (-1 left, 1 right, 0 neither). Volume
+/// changes keep these ratios, so a balance set elsewhere survives a fader.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Layout {
+    pub levels: Vec<f32>,
+    pub sides: Vec<i8>,
+}
+
+impl Layout {
+    fn new(v: &ChannelVolumes, map: &ChannelMap) -> Self {
+        // At 0% the ratios are gone; start again from centred.
+        let max = v.max().0 as f32;
+        let levels = v.get().iter().map(|c| if max > 0.0 { (c.0 as f32 / max).clamp(0.0, 1.0) } else { 1.0 }).collect();
+        let sides = (0..v.len() as usize)
+            .map(|i| match map.get().get(i) {
+                Some(
+                    Position::FrontLeft
+                    | Position::RearLeft
+                    | Position::SideLeft
+                    | Position::FrontLeftOfCenter
+                    | Position::TopFrontLeft
+                    | Position::TopRearLeft,
+                ) => -1,
+                Some(
+                    Position::FrontRight
+                    | Position::RearRight
+                    | Position::SideRight
+                    | Position::FrontRightOfCenter
+                    | Position::TopFrontRight
+                    | Position::TopRearRight,
+                ) => 1,
+                _ => 0,
+            })
+            .collect();
+        Layout { levels, sides }
+    }
+
+    pub fn channels(&self) -> usize {
+        self.levels.len()
+    }
+
+    fn side_level(&self, side: i8) -> Option<f32> {
+        self.levels.iter().zip(&self.sides).filter(|(_, s)| **s == side).map(|(l, _)| *l).reduce(f32::max)
+    }
+
+    /// -1 (all left) to 1 (all right), the way pavucontrol shows it.
+    pub fn balance(&self) -> f32 {
+        match (self.side_level(-1), self.side_level(1)) {
+            (Some(l), Some(r)) if l.max(r) > 0.0 => (r - l) / l.max(r),
+            _ => 0.0,
+        }
+    }
+
+    /// The same channels with this balance.
+    pub fn with_balance(&self, balance: f32) -> Layout {
+        let b = balance.clamp(-1.0, 1.0);
+        let levels = self
+            .sides
+            .iter()
+            .zip(&self.levels)
+            .map(|(side, level)| match side {
+                -1 => (1.0 - b).min(1.0),
+                1 => (1.0 + b).min(1.0),
+                _ => *level,
+            })
+            .collect();
+        Layout { levels, sides: self.sides.clone() }
+    }
+
+    /// Raw channel volumes for `frac` (1.0 = 100%) on the loudest channel.
+    fn volumes(&self, frac: f32) -> ChannelVolumes {
+        let top = frac.clamp(0.0, 1.5) as f64 * Volume::NORMAL.0 as f64;
+        let mut cv = ChannelVolumes::default();
+        cv.set_len(self.channels() as u8);
+        for (v, level) in cv.get_mut().iter_mut().zip(&self.levels) {
+            *v = Volume((top * *level as f64).round() as u32);
+        }
+        cv
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -59,7 +142,7 @@ pub struct AppStream {
     pub role: String,
     pub volume: f32,
     pub mute: bool,
-    pub channels: u8,
+    pub layout: Layout,
     /// Sink (for playback) or source (for recording) index.
     pub device: u32,
 }
@@ -143,6 +226,8 @@ pub enum MeterKey {
 #[allow(clippy::enum_variant_names)]
 pub enum AudioCmd {
     SetVolume(Kind, u32, f32),
+    /// Left/right balance, -1 to 1, keeping the volume.
+    SetBalance(Kind, u32, f32),
     SetMute(Kind, u32, bool),
     SetDefault(Kind, String),
     /// Move an app's stream to another device (by name).
@@ -446,7 +531,7 @@ fn refresh(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>) {
                                 icon: props_str(&i.proplist, "device.icon_name"),
                                 volume: vol_frac(&i.volume),
                                 mute: i.mute,
-                                channels: i.volume.len(),
+                                layout: Layout::new(&i.volume, &i.channel_map),
                                 monitor_source: i.monitor_source_name.as_deref().unwrap_or_default().to_string(),
                             };
                             s.new_sinks.push(split_label(d));
@@ -477,7 +562,7 @@ fn refresh(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>) {
                                 icon: props_str(&i.proplist, "device.icon_name"),
                                 volume: vol_frac(&i.volume),
                                 mute: i.mute,
-                                channels: i.volume.len(),
+                                layout: Layout::new(&i.volume, &i.channel_map),
                                 monitor_source: String::new(),
                             };
                             s.new_sources.push(split_label(d));
@@ -495,7 +580,15 @@ fn refresh(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>) {
                     let mut s = sh.borrow_mut();
                     match r {
                         ListResult::Item(i) => {
-                            let a = app_stream(i.index, &i.proplist, &i.volume, i.mute, i.sink, i.name.as_deref());
+                            let a = app_stream(
+                                i.index,
+                                &i.proplist,
+                                &i.volume,
+                                &i.channel_map,
+                                i.mute,
+                                i.sink,
+                                i.name.as_deref(),
+                            );
                             if a.app_name != APP_NAME && !is_loopback(&a, &i.proplist) {
                                 s.new_apps.push(a);
                             }
@@ -513,7 +606,15 @@ fn refresh(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>) {
                     let mut s = sh.borrow_mut();
                     match r {
                         ListResult::Item(i) => {
-                            let a = app_stream(i.index, &i.proplist, &i.volume, i.mute, i.source, i.name.as_deref());
+                            let a = app_stream(
+                                i.index,
+                                &i.proplist,
+                                &i.volume,
+                                &i.channel_map,
+                                i.mute,
+                                i.source,
+                                i.name.as_deref(),
+                            );
                             // Hide our own and other mixers' peak-detect streams.
                             let peak = a.media_name.to_lowercase().contains("peak");
                             if a.app_name != APP_NAME && !peak && !is_loopback(&a, &i.proplist) {
@@ -567,7 +668,15 @@ fn is_loopback(a: &AppStream, p: &Proplist) -> bool {
     ours(&a.media_name) || ours(&props_str(p, "media.name"))
 }
 
-fn app_stream(index: u32, p: &Proplist, v: &ChannelVolumes, mute: bool, device: u32, name: Option<&str>) -> AppStream {
+fn app_stream(
+    index: u32,
+    p: &Proplist,
+    v: &ChannelVolumes,
+    map: &ChannelMap,
+    mute: bool,
+    device: u32,
+    name: Option<&str>,
+) -> AppStream {
     AppStream {
         index,
         app_name: repair_text(&props_str(p, "application.name")),
@@ -578,8 +687,40 @@ fn app_stream(index: u32, p: &Proplist, v: &ChannelVolumes, mute: bool, device: 
         role: props_str(p, "media.role"),
         volume: vol_frac(v),
         mute,
-        channels: v.len(),
+        layout: Layout::new(v, map),
         device,
+    }
+}
+
+/// A device's or stream's channel layout and volume.
+fn layout_of(st: &AudioState, kind: Kind, index: u32) -> Option<(Layout, f32)> {
+    let found = match kind {
+        Kind::Sink => st.sinks.iter().find(|d| d.index == index).map(|d| (d.layout.clone(), d.volume)),
+        Kind::Source => st.sources.iter().find(|d| d.index == index).map(|d| (d.layout.clone(), d.volume)),
+        Kind::SinkInput => st.apps.iter().find(|d| d.index == index).map(|d| (d.layout.clone(), d.volume)),
+        Kind::SourceOutput => st.app_inputs.iter().find(|d| d.index == index).map(|d| (d.layout.clone(), d.volume)),
+    };
+    found.filter(|(l, _)| l.channels() > 0)
+}
+
+fn store_layout(st: &mut AudioState, kind: Kind, index: u32, layout: Layout) {
+    let slot = match kind {
+        Kind::Sink => st.sinks.iter_mut().find(|d| d.index == index).map(|d| &mut d.layout),
+        Kind::Source => st.sources.iter_mut().find(|d| d.index == index).map(|d| &mut d.layout),
+        Kind::SinkInput => st.apps.iter_mut().find(|d| d.index == index).map(|d| &mut d.layout),
+        Kind::SourceOutput => st.app_inputs.iter_mut().find(|d| d.index == index).map(|d| &mut d.layout),
+    };
+    if let Some(slot) = slot {
+        *slot = layout;
+    }
+}
+
+fn set_volume(intro: &mut pa::context::introspect::Introspector, kind: Kind, index: u32, cv: &ChannelVolumes) {
+    match kind {
+        Kind::Sink => drop(intro.set_sink_volume_by_index(index, cv, None)),
+        Kind::Source => drop(intro.set_source_volume_by_index(index, cv, None)),
+        Kind::SinkInput => drop(intro.set_sink_input_volume(index, cv, None)),
+        Kind::SourceOutput => drop(intro.set_source_output_volume(index, cv, None)),
     }
 }
 
@@ -588,23 +729,16 @@ fn apply(ctx: &Rc<RefCell<Context>>, shared: &Rc<RefCell<Shared>>, cmd: AudioCmd
     let mut intro = c.introspect();
     match cmd {
         AudioCmd::SetVolume(kind, index, frac) => {
-            let s = shared.borrow();
-            let channels = match kind {
-                Kind::Sink => s.state.sinks.iter().find(|d| d.index == index).map(|d| d.channels),
-                Kind::Source => s.state.sources.iter().find(|d| d.index == index).map(|d| d.channels),
-                Kind::SinkInput => s.state.apps.iter().find(|d| d.index == index).map(|d| d.channels),
-                Kind::SourceOutput => s.state.app_inputs.iter().find(|d| d.index == index).map(|d| d.channels),
-            };
-            let Some(ch) = channels.filter(|c| *c > 0) else { return };
-            let mut cv = ChannelVolumes::default();
-            let raw = (frac.clamp(0.0, 1.5) as f64 * Volume::NORMAL.0 as f64).round() as u32;
-            cv.set(ch, Volume(raw));
-            match kind {
-                Kind::Sink => drop(intro.set_sink_volume_by_index(index, &cv, None)),
-                Kind::Source => drop(intro.set_source_volume_by_index(index, &cv, None)),
-                Kind::SinkInput => drop(intro.set_sink_input_volume(index, &cv, None)),
-                Kind::SourceOutput => drop(intro.set_source_output_volume(index, &cv, None)),
-            }
+            let Some((layout, _)) = layout_of(&shared.borrow().state, kind, index) else { return };
+            set_volume(&mut intro, kind, index, &layout.volumes(frac));
+        }
+        AudioCmd::SetBalance(kind, index, balance) => {
+            let mut s = shared.borrow_mut();
+            let Some((layout, volume)) = layout_of(&s.state, kind, index) else { return };
+            let layout = layout.with_balance(balance);
+            set_volume(&mut intro, kind, index, &layout.volumes(volume));
+            // Until the server reports back, volume changes use the new balance.
+            store_layout(&mut s.state, kind, index, layout);
         }
         AudioCmd::SetMute(kind, index, m) => match kind {
             Kind::Sink => drop(intro.set_sink_mute_by_index(index, m, None)),
@@ -750,6 +884,25 @@ mod tests {
         assert_eq!((a.display_name().as_str(), a.pattern().as_str()), ("Vesktop", "vesktop"));
         let a = AppStream { media_name: "audio stream #1".into(), ..Default::default() };
         assert_eq!((a.display_name().as_str(), a.pattern().as_str()), ("audio stream #1", "audio stream #1"));
+    }
+
+    #[test]
+    fn volume_keeps_the_balance() {
+        let stereo = Layout { levels: vec![1.0, 0.5], sides: vec![-1, 1] };
+        let cv = stereo.volumes(0.8);
+        let raw: Vec<u32> = cv.get().iter().map(|v| v.0).collect();
+        let n = Volume::NORMAL.0 as f32;
+        assert_eq!(raw, [(0.8 * n).round() as u32, (0.4 * n).round() as u32]);
+        assert!((stereo.balance() + 0.5).abs() < 1e-6);
+        let centred = stereo.with_balance(0.0);
+        assert_eq!(centred.levels, [1.0, 1.0]);
+        let right = stereo.with_balance(0.25);
+        assert_eq!(right.levels, [0.75, 1.0]);
+        assert!((right.balance() - 0.25).abs() < 1e-6);
+        // Mono has no sides: nothing to balance.
+        let mono = Layout { levels: vec![1.0], sides: vec![0] };
+        assert_eq!(mono.with_balance(-1.0).levels, [1.0]);
+        assert_eq!(mono.balance(), 0.0);
     }
 
     #[test]
