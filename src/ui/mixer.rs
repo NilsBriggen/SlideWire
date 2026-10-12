@@ -239,9 +239,12 @@ impl App {
                         if widgets::icon_framed(ui, icon::FLOPPY_DISK, &t!("Overwrite with the current volumes"))
                             .clicked()
                         {
-                            self.send(UiCmd::SaveScene(name.clone()));
-                            self.flash(t!("Saved scene \"%{name}\"", name = name));
+                            self.save_scene(name);
                         }
+                        let more = widgets::icon_framed(ui, icon::DOTS_THREE, &t!("Fade and name"));
+                        egui::Popup::menu(&more)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| self.scene_options(ui, name));
                     });
                 });
             }
@@ -265,14 +268,75 @@ impl App {
                 );
                 let name = self.scene_name.trim().to_string();
                 if ui.add_enabled(!name.is_empty(), egui::Button::new(t!("Save"))).clicked() {
-                    self.send(UiCmd::SaveScene(name.clone()));
-                    self.flash(t!("Saved scene \"%{name}\"", name = name));
+                    if scenes.contains(&name) {
+                        self.confirm = Some(super::Confirm {
+                            title: t!("Replace \"%{name}\"?", name = name).to_string(),
+                            body: t!("A scene with this name exists. It gets the current volumes instead.").to_string(),
+                            button: t!("Replace").to_string(),
+                            action: super::ConfirmAction::SaveScene(name),
+                            alt: None,
+                        });
+                    } else {
+                        self.save_scene(&name);
+                    }
                     self.scene_name.clear();
                     ui.close();
                 }
             });
             widgets::hint(ui, &t!("Buttons can recall scenes too (Buttons page)."));
         });
+    }
+
+    /// A scene's fade and name.
+    fn scene_options(&mut self, ui: &mut egui::Ui, name: &str) {
+        ui.set_width(220.0);
+        let fade = {
+            let sh = self.shared.lock().unwrap();
+            sh.active().and_then(|p| p.scenes.get(name)).and_then(|s| s.fade_ms)
+        };
+        section_label(ui, &t!("Fade"));
+        ui.horizontal_wrapped(|ui| {
+            for (ms, label) in [
+                (None, t!("Off").to_string()),
+                (Some(500), t!("%{seconds} s", seconds = "0.5").to_string()),
+                (Some(1000), t!("%{seconds} s", seconds = "1").to_string()),
+                (Some(2000), t!("%{seconds} s", seconds = "2").to_string()),
+                (Some(5000), t!("%{seconds} s", seconds = "5").to_string()),
+            ] {
+                if ui.selectable_label(fade == ms, label).clicked() && fade != ms {
+                    let name = name.to_string();
+                    self.edit_profile(|p| {
+                        if let Some(s) = p.scenes.get_mut(&name) {
+                            s.fade_ms = ms;
+                        }
+                    });
+                }
+            }
+        });
+        widgets::hint(ui, &t!("Glide to the scene instead of jumping. Moving a fader stops its glide."));
+        section_label(ui, &t!("Name"));
+        let editing = self.scene_rename.as_ref().is_some_and(|(old, _)| old == name);
+        if !editing {
+            self.scene_rename = Some((name.to_string(), name.to_string()));
+        }
+        let Some((_, new)) = &mut self.scene_rename else { return };
+        let r = ui.add(egui::TextEdit::singleline(new).desired_width(f32::INFINITY));
+        let new = new.trim().to_string();
+        let taken = new != name && {
+            let sh = self.shared.lock().unwrap();
+            sh.active().is_some_and(|p| p.scenes.contains_key(&new))
+        };
+        if taken {
+            widgets::hint(ui, &t!("Another scene has this name."));
+        }
+        let ok = !new.is_empty() && new != name && !taken;
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if ui.add_enabled(ok, egui::Button::new(t!("Rename"))).clicked() || (ok && enter) {
+            let old = name.to_string();
+            self.edit_profile(|p| p.rename_scene(&old, &new));
+            self.scene_rename = None;
+            ui.close();
+        }
     }
 
     /// Knob on top, fader below, like the channel on the hardware.

@@ -395,9 +395,13 @@ pub enum ButtonAction {
     Bank {
         step: i32,
     },
-    /// Recall a saved scene.
+    /// Recall a saved scene. The LED is lit while it's the last one recalled.
     Scene {
         name: String,
+    },
+    /// Recall the next or previous scene, in the Scenes menu's order.
+    SceneStep {
+        step: i32,
     },
     /// Mute or unmute every input device. The LED shows the default input's mute.
     MuteInputs,
@@ -436,6 +440,7 @@ impl ButtonAction {
             ButtonAction::Profile { .. } => t!("Switch profile").into(),
             ButtonAction::Bank { .. } => t!("Previous/next bank").into(),
             ButtonAction::Scene { .. } => t!("Recall scene").into(),
+            ButtonAction::SceneStep { .. } => t!("Previous/next scene").into(),
             ButtonAction::MuteInputs => t!("Mute all inputs").into(),
             ButtonAction::PushToTalk => t!("Push to talk").into(),
             ButtonAction::PushToMute => t!("Push to mute").into(),
@@ -578,9 +583,13 @@ pub enum AutoAction {
 
 /// Volume position (0..=1) and mute of every strip, per bank.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Scene {
     pub bank: usize,
     pub strips: IndexMap<String, SceneStrip>,
+    /// Glide to the scene over this long instead of jumping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -647,6 +656,31 @@ impl Profile {
         }
         if self.bank >= self.bank_count() {
             self.bank = self.bank_count() - 1;
+        }
+    }
+
+    /// Rename a scene in place, and the buttons and focus rules that
+    /// recall it.
+    pub fn rename_scene(&mut self, old: &str, new: &str) {
+        let Some(i) = self.scenes.get_index_of(old) else { return };
+        if self.scenes.contains_key(new) {
+            return;
+        }
+        let scene = self.scenes.shift_remove(old).unwrap_or_default();
+        self.scenes.shift_insert(i, new.to_string(), scene);
+        for action in self.buttons.values_mut() {
+            if let ButtonAction::Scene { name } = action
+                && name == old
+            {
+                *name = new.to_string();
+            }
+        }
+        for rule in &mut self.auto {
+            if let AutoAction::Scene { name } = &mut rule.action
+                && name == old
+            {
+                *name = new.to_string();
+            }
         }
     }
 
@@ -950,5 +984,28 @@ mod tests {
         // Clearing bank 1 changes nothing else.
         p.remove_bank(0);
         assert_eq!(p.scenes.values().map(|s| s.bank).collect::<Vec<_>>(), [0, 0, 1, 2]);
+    }
+
+    #[test]
+    fn renaming_a_scene_follows_buttons_and_rules() {
+        let mut p = Profile::nanokontrol2();
+        for name in ["Day", "Night", "Game"] {
+            p.scenes.insert(name.into(), Scene::default());
+        }
+        let cid = p.controls.keys().next().unwrap().clone();
+        p.buttons.insert(cid.clone(), ButtonAction::Scene { name: "Night".into() });
+        p.auto = vec![AutoRule {
+            app: AppMatch { pattern: "game".into(), regex: false },
+            label: String::new(),
+            action: AutoAction::Scene { name: "Night".into() },
+        }];
+        p.rename_scene("Night", "Late");
+        assert_eq!(p.scenes.keys().collect::<Vec<_>>(), ["Day", "Late", "Game"]);
+        assert!(matches!(&p.buttons[&cid], ButtonAction::Scene { name } if name == "Late"));
+        assert!(matches!(&p.auto[0].action, AutoAction::Scene { name } if name == "Late"));
+        // Never over another scene.
+        p.rename_scene("Late", "Day");
+        assert_eq!(p.scenes.len(), 3);
+        assert!(p.scenes.contains_key("Late"));
     }
 }

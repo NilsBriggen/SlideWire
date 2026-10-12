@@ -75,6 +75,8 @@ pub(super) struct Confirm {
 pub(super) enum ConfirmAction {
     DeleteProfile(String),
     RemoveBank(usize),
+    /// Save the strips over an existing scene.
+    SaveScene(String),
     /// Import a profile; `trusted` keeps its command and key buttons.
     Import {
         path: String,
@@ -106,6 +108,8 @@ pub struct App {
     expanded_control: Option<String>,
     control_search: String,
     scene_name: String,
+    /// The scene being renamed: (old name, new name).
+    scene_rename: Option<(String, String)>,
     source_filter: String,
     /// Name typed for a new bus.
     new_bus: String,
@@ -181,6 +185,7 @@ impl App {
             expanded_control: None,
             control_search: String::new(),
             scene_name: String::new(),
+            scene_rename: None,
             rename: None,
             source_filter: String::new(),
             new_bus: String::new(),
@@ -251,6 +256,28 @@ impl App {
         }
         drop(sh);
         self.send(UiCmd::ProfileEdited);
+    }
+
+    /// Save the strips as a scene. Saving over one can be undone.
+    pub(super) fn save_scene(&mut self, name: &str) {
+        let replacing = {
+            let sh = self.shared.lock().unwrap();
+            let id = sh.active_id();
+            let p = sh.active();
+            match (id, p) {
+                (Some(id), Some(p)) if p.scenes.contains_key(name) => {
+                    self.history.borrow_mut().record(&id, p, Instant::now());
+                    true
+                }
+                _ => false,
+            }
+        };
+        self.send(UiCmd::SaveScene(name.to_string()));
+        if replacing {
+            self.toast(icon::FLOPPY_DISK, t!("Saved over scene \"%{name}\"", name = name), None, Some(ToastUndo::Edit));
+        } else {
+            self.flash(t!("Saved scene \"%{name}\"", name = name));
+        }
     }
 
     /// Start learning control `cid`: the next message from the controller
@@ -849,6 +876,7 @@ impl App {
                 self.send(UiCmd::ProfileEdited);
             }
             ConfirmAction::RemoveBank(i) => self.edit_profile(|p| p.remove_bank(i)),
+            ConfirmAction::SaveScene(name) => self.save_scene(&name),
             ConfirmAction::Import { path, trusted } => self.import_profile(&path, trusted),
         }
     }

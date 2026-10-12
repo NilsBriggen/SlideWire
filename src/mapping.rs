@@ -218,6 +218,13 @@ impl Range {
     }
 }
 
+/// A fade from `from` to `to`, `t` of the way through (0..=1): eased at
+/// both ends, the way a hand moves a fader.
+pub fn fade(from: f32, to: f32, t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    from + (to - from) * t * t * (3.0 - 2.0 * t)
+}
+
 /// Where the dB marks sit on a fader: (position 0..=1, dB) for the marks
 /// inside its range. PulseAudio's volume scale is cubic, so
 /// dB = 60·log10(volume).
@@ -488,5 +495,19 @@ mod tests {
         assert!(picks_up(None, 0.61, 0.6));
         // Once picked up, small moves keep following.
         assert!(picks_up(Some(0.6), 0.65, 0.6));
+    }
+
+    #[test]
+    fn fades_ease_in_and_out() {
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        assert!(near(fade(0.2, 0.8, 0.0), 0.2));
+        assert!(near(fade(0.2, 0.8, 1.0), 0.8));
+        assert!(near(fade(0.2, 0.8, 0.5), 0.5));
+        // Slow at the start, fast in the middle.
+        assert!(fade(0.0, 1.0, 0.1) < 0.1);
+        assert!(fade(0.0, 1.0, 0.6) > 0.6);
+        // Past the end stays at the end; downwards works too.
+        assert!(near(fade(0.9, 0.1, 2.0), 0.1));
+        assert!(fade(0.9, 0.1, 0.25) < 0.9);
     }
 }

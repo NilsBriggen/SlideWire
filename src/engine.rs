@@ -213,6 +213,16 @@ pub type SharedRef = Arc<Mutex<Shared>>;
 
 /// A concrete thing a target currently resolves to.
 #[derive(Debug, Clone)]
+/// A strip gliding to a scene's position.
+struct Fade {
+    from: f32,
+    to: f32,
+    start: Instant,
+    length: Duration,
+    /// Mute once there (fading out, then muting, sounds smooth).
+    mute_at_end: bool,
+}
+
 struct Resolved {
     kind: Kind,
     index: u32,
@@ -255,6 +265,10 @@ pub struct Engine {
     rescan_follow_up: Option<Instant>,
     /// Volumes and mutes from before the last scene recall.
     scene_undo: Option<crate::profile::Scene>,
+    /// The scene recalled last (for next/previous and scene LEDs).
+    last_scene: Option<String>,
+    /// Strips gliding to a scene: group id -> the fade.
+    fades: HashMap<String, Fade>,
     /// Ducking: the gain envelope, when it was last advanced, and the
     /// volume each turned-down app stream should go back to.
     ducker: mapping::Ducker,
@@ -317,6 +331,8 @@ impl Engine {
             rescan_at: None,
             rescan_follow_up: None,
             scene_undo: None,
+            fades: HashMap::new(),
+            last_scene: None,
             ducker: mapping::Ducker::default(),
             duck_tick: Instant::now(),
             duck_base: HashMap::new(),
@@ -344,6 +360,7 @@ impl Engine {
             // wake only for the periodic port scan.
             let busy = !self.meters_wanted.is_empty()
                 || !self.duck_base.is_empty()
+                || !self.fades.is_empty()
                 || self.rescan_at.is_some()
                 || self.auto_restore_at.is_some()
                 || self.shared.lock().unwrap().store.has_unsaved();
@@ -371,6 +388,9 @@ impl Engine {
                 Err(_) => return,
             }
             self.save_if_due(false);
+            if !self.fades.is_empty() {
+                self.step_fades();
+            }
             if self.auto_restore_at.is_some_and(|t| Instant::now() >= t) {
                 self.auto_restore_at = None;
                 self.auto_restore();
@@ -653,6 +673,7 @@ impl Engine {
                             continue;
                         }
                         self.waiting.remove(gid);
+                        self.fades.remove(gid);
                         self.set_group_position(&profile, gid, pos, true);
                     }
                 }
@@ -667,6 +688,7 @@ impl Engine {
                             self.set_group_balance(gid, (cur + 2.0 * clicks as f32 / steps as f32).clamp(-1.0, 1.0));
                         }
                         if g.faders.contains(cid) {
+                            self.fades.remove(gid);
                             let cur = self.group_position(&profile, gid);
                             let pos = (cur + clicks as f32 / steps as f32).clamp(0.0, 1.0);
                             self.set_group_position(&profile, gid, pos, true);
@@ -740,6 +762,20 @@ impl Engine {
             ButtonAction::Profile { id } => self.activate_profile(id),
             ButtonAction::Bank { step } => self.set_bank(None, *step),
             ButtonAction::Scene { name } => self.recall_scene(name),
+            ButtonAction::SceneStep { step } => {
+                let names: Vec<&String> = profile.scenes.keys().collect();
+                if names.is_empty() {
+                    return;
+                }
+                let n = names.len() as i32;
+                let next = match self.last_scene.as_ref().and_then(|l| names.iter().position(|s| *s == l)) {
+                    Some(i) => (i as i32 + step).rem_euclid(n),
+                    None if *step < 0 => n - 1,
+                    None => 0,
+                };
+                let name = names[next as usize].clone();
+                self.recall_scene(&name);
+            }
             ButtonAction::MuteInputs => {
                 let sh = self.shared.lock().unwrap();
                 let default_muted =
@@ -895,7 +931,9 @@ impl Engine {
 
     fn save_scene(&mut self, name: &str) {
         let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
-        let scene = self.snapshot(&profile);
+        let mut scene = self.snapshot(&profile);
+        // Saving over a scene keeps its fade.
+        scene.fade_ms = profile.scenes.get(name).and_then(|s| s.fade_ms);
         let mut sh = self.shared.lock().unwrap();
         let Some(id) = sh.active_id() else { return };
         sh.store.profiles.get_mut(&id).unwrap().scenes.insert(name.to_string(), scene);
@@ -910,6 +948,7 @@ impl Engine {
             return;
         };
         self.scene_undo = Some(self.snapshot(&profile));
+        self.last_scene = Some(name.to_string());
         self.apply_scene(&scene);
         let mut sh = self.shared.lock().unwrap();
         sh.log(format!("Recalled scene \"{name}\""));
@@ -926,18 +965,77 @@ impl Engine {
             self.set_bank(Some(scene.bank), 0);
         }
         let Some(profile) = self.shared.lock().unwrap().active().cloned() else { return };
+        let length = Duration::from_millis(scene.fade_ms.unwrap_or(0) as u64);
+        let start = Instant::now();
+        self.fades.clear();
         for (gid, st) in &scene.strips {
             if !profile.groups.contains_key(gid) {
                 continue;
             }
-            self.set_group_position(&profile, gid, st.position, false);
             let (targets, _) = self.group_settings(&profile, gid);
-            for r in self.resolve(&profile, &targets) {
-                self.audio.send(AudioCmd::SetMute(r.kind, r.index, st.mute));
-                self.optimistic(r.kind, r.index, None, Some(st.mute));
+            let res = self.resolve(&profile, &targets);
+            let from = self.group_position(&profile, gid);
+            let glide = !length.is_zero() && (from - st.position).abs() > 0.005;
+            if glide {
+                self.fades.insert(
+                    gid.clone(),
+                    Fade { from, to: st.position, start, length, mute_at_end: st.mute && !res.iter().all(|r| r.mute) },
+                );
+            } else {
+                self.set_group_position(&profile, gid, st.position, false);
+            }
+            // Unmute now so the fade is heard; a mute waits for the fade's end.
+            if !(glide && st.mute) {
+                for r in &res {
+                    self.audio.send(AudioCmd::SetMute(r.kind, r.index, st.mute));
+                    self.optimistic(r.kind, r.index, None, Some(st.mute));
+                }
             }
         }
         self.mark_pickup();
+    }
+
+    /// Move the gliding strips along their fades.
+    fn step_fades(&mut self) {
+        let Some(profile) = self.shared.lock().unwrap().active().cloned() else {
+            self.fades.clear();
+            return;
+        };
+        let now = Instant::now();
+        let mut done = Vec::new();
+        let steps: Vec<(String, f32, bool, bool)> = self
+            .fades
+            .iter()
+            .map(|(gid, f)| {
+                let t = now.duration_since(f.start).as_secs_f32() / f.length.as_secs_f32().max(0.001);
+                (gid.clone(), mapping::fade(f.from, f.to, t), t >= 1.0, f.mute_at_end)
+            })
+            .collect();
+        for (gid, pos, finished, mute) in steps {
+            if !profile.groups.contains_key(&gid) {
+                done.push(gid);
+                continue;
+            }
+            self.set_group_position(&profile, &gid, pos, false);
+            if finished {
+                if mute {
+                    let (targets, _) = self.group_settings(&profile, &gid);
+                    for r in self.resolve(&profile, &targets) {
+                        self.audio.send(AudioCmd::SetMute(r.kind, r.index, true));
+                        self.optimistic(r.kind, r.index, None, Some(true));
+                    }
+                }
+                done.push(gid);
+            }
+        }
+        for gid in done {
+            self.fades.remove(&gid);
+        }
+        if self.fades.is_empty() {
+            self.mark_pickup();
+        }
+        self.feedback();
+        self.shared.lock().unwrap().repaint();
     }
 
     fn cycle_default(&mut self, kind: Kind, names: &[String]) {
@@ -973,6 +1071,8 @@ impl Engine {
         if !sh.store.profiles.contains_key(id) {
             return;
         }
+        self.last_scene = None;
+        self.fades.clear();
         sh.store.settings.active_profile = Some(id.to_string());
         sh.store.touch_settings();
         drop(sh);
@@ -992,6 +1092,7 @@ impl Engine {
         let profile = self.shared.lock().unwrap().active().cloned();
         match cmd {
             UiCmd::SetGroupPosition(gid, pos) => {
+                self.fades.remove(&gid);
                 if let Some(p) = &profile {
                     self.set_group_position(p, &gid, pos, false);
                 }
@@ -1801,6 +1902,8 @@ impl Engine {
         for (cid, action) in &profile.buttons {
             let on = match action {
                 ButtonAction::Bank { .. } => profile.bank > 0,
+                ButtonAction::Scene { name } => self.last_scene.as_ref() == Some(name),
+                ButtonAction::SceneStep { .. } => self.last_scene.is_some(),
                 ButtonAction::MuteInputs | ButtonAction::PushToMute => mic_muted,
                 ButtonAction::PushToTalk => !mic_muted,
                 ButtonAction::Monitor { source, .. } => {

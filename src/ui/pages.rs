@@ -816,6 +816,7 @@ fn action_editor(
         ButtonAction::Profile { id: String::new() },
         ButtonAction::Bank { step: 1 },
         ButtonAction::Scene { name: scenes.first().cloned().unwrap_or_default() },
+        ButtonAction::SceneStep { step: 1 },
         ButtonAction::MuteInputs,
         ButtonAction::PushToTalk,
         ButtonAction::PushToMute,
@@ -940,6 +941,13 @@ fn action_editor(
                     }
                 });
             }
+        }
+        ButtonAction::SceneStep { step } => {
+            ui.horizontal(|ui| {
+                ui.selectable_value(step, -1, format!("{}  {}", icon::CARET_LEFT, t!("Previous")));
+                ui.selectable_value(step, 1, format!("{}  {}", icon::CARET_RIGHT, t!("Next")));
+            });
+            widgets::hint(ui, &t!("In the order of the Scenes menu, wrapping around."));
         }
         ButtonAction::MuteInputs => {
             widgets::hint(ui, &t!("Mutes or unmutes every microphone. The LED is lit while they're muted."));
