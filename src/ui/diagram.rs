@@ -56,7 +56,7 @@ pub fn draw(ui: &mut Ui, p: &Profile, live: &LiveState) -> Option<String> {
 
 // ------------------------------------------------------------ primitives
 
-fn touch_glow(painter: &egui::Painter, rect: Rect, radius: f32, amount: f32) {
+pub(super) fn touch_glow(painter: &egui::Painter, rect: Rect, radius: f32, amount: f32) {
     if amount > 0.0 {
         widgets::glow(painter, rect, radius, pal().accent.gamma_multiply(0.55 * amount), 14.0);
         painter.rect_stroke(

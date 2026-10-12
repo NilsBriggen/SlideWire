@@ -659,6 +659,20 @@ impl Profile {
         }
     }
 
+    /// Swap what two strips control in the active bank, with their names,
+    /// colours and settings. Each keeps how it is drawn (fader or knob).
+    pub fn swap_strips(&mut self, a: &str, b: &str) {
+        if a == b {
+            return;
+        }
+        let bank = self.current_mut();
+        let mut sa = bank.shift_remove(a).unwrap_or_default();
+        let mut sb = bank.shift_remove(b).unwrap_or_default();
+        std::mem::swap(&mut sa.widget, &mut sb.widget);
+        bank.insert(a.to_string(), sb);
+        bank.insert(b.to_string(), sa);
+    }
+
     /// Rename a scene in place, and the buttons and focus rules that
     /// recall it.
     pub fn rename_scene(&mut self, old: &str, new: &str) {
@@ -1035,5 +1049,30 @@ mod tests {
         // The spec.json export leaves all of that out.
         let spec: Profile = serde_json::from_str(&p.to_spec_json().unwrap()).unwrap();
         assert!(spec.scenes.is_empty() && spec.assignments.is_empty() && spec.buttons.is_empty());
+    }
+
+    #[test]
+    fn swapping_strips() {
+        let mut p = Profile::nanokontrol2();
+        let mut gids = p.groups.keys().cloned();
+        let (a, b) = (gids.next().unwrap(), gids.next().unwrap());
+        let bank = p.current_mut();
+        bank.insert(
+            a.clone(),
+            GroupSettings {
+                targets: vec![Target::DefaultOutput],
+                label: Some("Speakers".into()),
+                widget: Some(Widget::Knob),
+                ..Default::default()
+            },
+        );
+        p.swap_strips(&a, &b);
+        let bank = p.current();
+        assert_eq!(bank[&b].targets, vec![Target::DefaultOutput]);
+        assert_eq!(bank[&b].label.as_deref(), Some("Speakers"));
+        assert!(bank[&a].targets.is_empty());
+        // How each strip is drawn stays put.
+        assert_eq!(bank[&a].widget, Some(Widget::Knob));
+        assert_eq!(bank[&b].widget, None);
     }
 }

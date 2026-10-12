@@ -9,6 +9,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::profile::Profile;
 
+/// The window's size in points, its position where the desktop tells it
+/// (not on Wayland), and whether it was maximized.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowGeometry {
+    pub width: f32,
+    pub height: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub maximized: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -41,6 +56,9 @@ pub struct Settings {
     pub language: String,
     /// Size of everything in the window (1.0 = 100%).
     pub ui_scale: f32,
+    /// Where the window was last, to open it there again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowGeometry>,
     /// The window's close button quits instead of hiding to the tray.
     pub close_quits: bool,
     /// The "still running in the tray" hint was shown.
@@ -116,6 +134,7 @@ impl Default for Settings {
             reduce_motion: false,
             language: String::new(),
             ui_scale: 1.0,
+            window: None,
             close_quits: false,
             tray_hint_shown: false,
             obs_url: "ws://localhost:4455".into(),

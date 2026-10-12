@@ -109,9 +109,15 @@ pub struct App {
     expanded_control: Option<String>,
     control_search: String,
     scene_name: String,
+    /// Strips whose hardware was just touched, and how recently (0..=1).
+    touched: HashMap<String, f32>,
     /// The scene being renamed: (old name, new name).
     scene_rename: Option<(String, String)>,
     source_filter: String,
+    /// Sources panel: hide what's already on a strip.
+    unassigned_only: bool,
+    /// Width of the names in the sources panel.
+    source_name_w: f32,
     /// Name typed for a new bus.
     new_bus: String,
     /// The zoom factor last applied from settings.
@@ -186,9 +192,12 @@ impl App {
             expanded_control: None,
             control_search: String::new(),
             scene_name: String::new(),
+            touched: HashMap::new(),
             scene_rename: None,
             rename: None,
             source_filter: String::new(),
+            unassigned_only: false,
+            source_name_w: 146.0,
             new_bus: String::new(),
             welcome_other: None,
             zoom: 0.0,
@@ -367,6 +376,40 @@ impl App {
             let z = ctx.zoom_factor();
             self.zoom = z;
             self.edit_settings(|s| s.ui_scale = z);
+        }
+    }
+
+    /// Remember the window's size (and position, where known) for next time.
+    fn remember_geometry(&self, ctx: &egui::Context) {
+        let (inner, outer, maximized, minimized) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.inner_rect, v.outer_rect, v.maximized.unwrap_or(false), v.minimized.unwrap_or(false))
+        });
+        let Some(inner) = inner else { return };
+        if minimized || inner.width() < 100.0 {
+            return;
+        }
+        // egui's points shrink with the UI size; the window is sized in the desktop's.
+        let z = ctx.zoom_factor();
+        let (inner, outer) = (inner * z, outer.map(|r| r * z));
+        let mut sh = self.shared.lock().unwrap();
+        let old = sh.store.settings.window;
+        // Maximized: keep the size it had before, to go back to.
+        let (width, height) = match old {
+            Some(o) if maximized => (o.width, o.height),
+            _ => (inner.width().round(), inner.height().round()),
+        };
+        let pos = outer.filter(|_| !maximized).map(|r| (r.min.x.round(), r.min.y.round()));
+        let geometry = crate::config::WindowGeometry {
+            width,
+            height,
+            x: pos.map(|p| p.0).or(old.and_then(|o| o.x)),
+            y: pos.map(|p| p.1).or(old.and_then(|o| o.y)),
+            maximized,
+        };
+        if old != Some(geometry) {
+            sh.store.settings.window = Some(geometry);
+            sh.store.touch_settings();
         }
     }
 
@@ -560,8 +603,19 @@ impl App {
         if pressed(Modifiers::NONE, Key::F1) {
             self.show_shortcuts = !self.show_shortcuts;
         }
+        if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::M) {
+            self.send(UiCmd::ToggleMicMute);
+        }
         if typing || self.tab != Tab::Mixer {
             return;
+        }
+        for (k, step) in [(Key::PageUp, -1), (Key::PageDown, 1)] {
+            if pressed(Modifiers::NONE, k) {
+                let bank = self.shared.lock().unwrap().active().map(|p| (p.bank, p.bank_count()));
+                if let Some((bank, count)) = bank.filter(|(_, n)| *n > 1) {
+                    self.send(UiCmd::SetBank((bank as i32 + step).rem_euclid(count as i32) as usize));
+                }
+            }
         }
         // Mixer: number keys pick a channel, arrows move its fader, M mutes it.
         let digits =
@@ -608,6 +662,8 @@ impl App {
                         ("↑ / ↓", t!("Move its fader 5% (Shift: 1%)")),
                         ("M", t!("Mute it")),
                         ("Esc", t!("Let go of the strip")),
+                        ("PgUp / PgDn", t!("Previous or next bank (Mixer)")),
+                        ("Ctrl+Shift+M", t!("Mute or unmute the microphone")),
                         ("Ctrl+F", t!("Filter the sources")),
                         ("Ctrl+Z", t!("Undo a change to assignments or the profile")),
                         ("Ctrl+Shift+Z", t!("Redo")),
@@ -927,6 +983,7 @@ impl eframe::App for App {
         theme::sync(&ctx, &settings);
         self.sync_zoom(&ctx, settings.ui_scale);
         self.sync_language(&ctx, &settings.language);
+        self.remember_geometry(&ctx);
         self.shortcuts(&ctx);
 
         egui::Panel::top("top")

@@ -373,15 +373,20 @@ fn run_window(
     tx: crossbeam_channel::Sender<Event>,
     window_rx: crossbeam_channel::Receiver<WindowCmd>,
 ) {
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Slidewire")
-            .with_app_id(APP_ID)
-            .with_inner_size([1040.0, 720.0])
-            .with_min_inner_size([560.0, 400.0])
-            .with_icon(Arc::new(icon::window_icon())),
-        ..Default::default()
-    };
+    let geometry = shared.lock().unwrap().store.settings.window;
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_title("Slidewire")
+        .with_app_id(APP_ID)
+        .with_inner_size([1040.0, 720.0])
+        .with_min_inner_size([560.0, 400.0])
+        .with_icon(Arc::new(icon::window_icon()));
+    if let Some(g) = geometry {
+        viewport = viewport.with_inner_size([g.width.max(560.0), g.height.max(400.0)]).with_maximized(g.maximized);
+        if let (Some(x), Some(y)) = (g.x, g.y) {
+            viewport = viewport.with_position([x, y]);
+        }
+    }
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
     let result = eframe::run_native(
         "Slidewire",
         options,

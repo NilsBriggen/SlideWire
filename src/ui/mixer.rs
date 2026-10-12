@@ -68,8 +68,27 @@ impl App {
     pub(super) fn mixer(&mut self, ui: &mut egui::Ui) {
         let (strips, audio) = {
             let sh = self.shared.lock().unwrap();
+            // How recently each strip's hardware was touched: 1 right after, fading over 600 ms.
+            self.touched.clear();
+            if let Some(p) = sh.active() {
+                for (cid, (when, _)) in &sh.activity {
+                    let amount = 1.0 - when.elapsed().as_secs_f32() / 0.6;
+                    if amount <= 0.0 {
+                        continue;
+                    }
+                    for (gid, g) in &p.groups {
+                        if g.uses(cid) {
+                            let t = self.touched.entry(gid.clone()).or_default();
+                            *t = t.max(amount);
+                        }
+                    }
+                }
+            }
             (sh.strips.clone(), sh.audio.clone())
         };
+        if !self.touched.is_empty() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        }
         let (bank, bank_count, scenes) = {
             let sh = self.shared.lock().unwrap();
             sh.active().map(|p| (p.bank, p.bank_count(), p.scenes.keys().cloned().collect::<Vec<_>>())).unwrap_or((
@@ -469,6 +488,9 @@ impl App {
                 Stroke::new(2.0, pal().accent.gamma_multiply(hover_t)),
                 StrokeKind::Inside,
             );
+        } else if let Some(&touch) = self.touched.get(&s.id) {
+            // The hardware control was just moved: show which strip it is.
+            super::diagram::touch_glow(&painter, zone.shrink(3.0), 7.0, touch);
         } else if dragging {
             // Free drop targets breathe while something is being dragged.
             let t = ui.input(|i| i.time) as f32;
@@ -725,7 +747,42 @@ impl App {
                 Some(super::ToastUndo::Edit),
             );
         }
-        ui.menu_button(format!("{}  {}", icon::PLUS, t!("Add…")), |ui| self.target_menu(ui, &s.id, audio));
+        ui.horizontal(|ui| {
+            ui.menu_button(format!("{}  {}", icon::PLUS, t!("Add…")), |ui| self.target_menu(ui, &s.id, audio));
+            ui.menu_button(format!("{}  {}", icon::ARROWS_LEFT_RIGHT, t!("Swap with…")), |ui| {
+                let others: Vec<(String, String)> = {
+                    let sh = self.shared.lock().unwrap();
+                    sh.strips
+                        .iter()
+                        .filter(|o| o.id != s.id)
+                        .map(|o| {
+                            let name = match &o.label {
+                                Some(l) => format!("{} · {l}", o.name),
+                                None => o.name.clone(),
+                            };
+                            (o.id.clone(), name)
+                        })
+                        .collect()
+                };
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for (gid, name) in others {
+                        if ui.button(&name).clicked() {
+                            let me = s.id.clone();
+                            self.edit_profile(|p| p.swap_strips(&me, &gid));
+                            self.toast(
+                                icon::ARROWS_LEFT_RIGHT,
+                                t!("Swapped with %{strip}", strip = name),
+                                None,
+                                Some(super::ToastUndo::Edit),
+                            );
+                            ui.close();
+                        }
+                    }
+                });
+            })
+            .response
+            .on_hover_text(t!("Trade everything on this strip with another one"));
+        });
         section_label(ui, &t!("Range and balance"));
         self.range_menu(ui, &s.id);
         self.identity_menu(ui, s, audio);
@@ -1063,13 +1120,19 @@ impl App {
     // ------------------------------------------------------------ sources
 
     pub(super) fn sources(&mut self, ui: &mut egui::Ui) {
-        let (audio, boost, peaks) = {
+        let (audio, boost, peaks, strips) = {
             let sh = self.shared.lock().unwrap();
-            (sh.audio.clone(), sh.store.settings.allow_boost, sh.source_peaks.clone())
+            (sh.audio.clone(), sh.store.settings.allow_boost, sh.source_peaks.clone(), sh.strips.clone())
         };
         ui.horizontal(|ui| {
             ui.label(RichText::new(t!("Sources")).font(semibold(17.0)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.toggle_value(&mut self.unassigned_only, format!("{}  {}", icon::FUNNEL, t!("Unassigned")))
+                    .on_hover_text(t!("Only show what isn't on a strip yet"));
+            });
         });
+        // Names get a share of the panel, so long names and longer languages fit.
+        self.source_name_w = (ui.available_width() * 0.42).clamp(110.0, 230.0);
         widgets::hint(
             ui,
             &format!("{}  {}", icon::DOTS_SIX_VERTICAL, t!("Drag a row by its handle onto a strip to assign it.")),
@@ -1105,6 +1168,10 @@ impl App {
                     }
                     let target =
                         Target::App { m: AppMatch { pattern: a.pattern(), regex: false }, label: name.clone() };
+                    let on = strip_for(&strips, &target, &name);
+                    if self.unassigned_only && on.is_some() {
+                        continue;
+                    }
                     let hints = vec![a.icon.clone(), a.binary.clone(), a.app_name.clone()];
                     let peak = g
                         .iter()
@@ -1124,6 +1191,7 @@ impl App {
                         peak,
                         max,
                         target,
+                        on,
                         Some((a.device, &audio.sinks)),
                     );
                 }
@@ -1142,6 +1210,10 @@ impl App {
                             m: AppMatch { pattern: a.pattern(), regex: false },
                             label: name.clone(),
                         };
+                        let on = strip_for(&strips, &target, &name);
+                        if self.unassigned_only && on.is_some() {
+                            continue;
+                        }
                         let hints = vec![a.icon.clone(), a.binary.clone(), a.app_name.clone()];
                         let indices: Vec<u32> = g.iter().map(|a| a.index).collect();
                         self.source_row(
@@ -1157,6 +1229,7 @@ impl App {
                             0.0,
                             max,
                             target,
+                            on,
                             Some((a.device, &audio.sources)),
                         );
                     }
@@ -1190,6 +1263,10 @@ impl App {
                                 MeterKey::Source(d.name.clone()),
                             )
                         };
+                        let on = strip_for(&strips, &target, &d.label);
+                        if self.unassigned_only && on.is_some() {
+                            continue;
+                        }
                         let hints = vec![d.icon.clone(), generic.into()];
                         let peak = peaks.get(&meter).copied().unwrap_or(0.0);
                         self.source_row(
@@ -1205,6 +1282,7 @@ impl App {
                             peak,
                             max,
                             target,
+                            on,
                             None,
                         );
                     }
@@ -1262,6 +1340,7 @@ impl App {
                                 peak,
                                 max,
                                 target,
+                                None,
                                 None,
                             );
                         });
@@ -1353,6 +1432,7 @@ impl App {
         peak: f32,
         max: f32,
         target: Target,
+        on: Option<String>,
         route: Option<(u32, &[crate::audio::Device])>,
     ) {
         let img = self.icons.image(hints);
@@ -1373,18 +1453,28 @@ impl App {
                     }
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.set_width(146.0);
+                        ui.set_width(self.source_name_w);
                         ui.add(egui::Label::new(RichText::new(name).size(13.0)).truncate());
                         if let Some(sub) = &sub {
                             ui.add(egui::Label::new(RichText::new(sub).size(11.0).color(pal().text_dim)).truncate());
+                        }
+                        if let Some(strip) = &on {
+                            let text = format!("{}  {strip}", icon::SLIDERS_HORIZONTAL);
+                            ui.add(egui::Label::new(RichText::new(text).size(11.0).color(pal().accent)).truncate());
                         }
                     });
                 });
             })
             .response
-            .on_hover_text(match &sub {
-                Some(sub) => format!("{name}\n{sub}"),
-                None => name.to_string(),
+            .on_hover_text({
+                let mut text = name.to_string();
+                if let Some(sub) = &sub {
+                    text = format!("{text}\n{sub}");
+                }
+                if let Some(strip) = &on {
+                    text = format!("{text}\n{}", t!("On %{strip}", strip = strip));
+                }
+                text
             })
             .on_hover_cursor(egui::CursorIcon::Grab);
 
@@ -1521,6 +1611,25 @@ pub(super) fn target_glyph(t: &Target) -> &'static str {
 fn section_label(ui: &mut egui::Ui, text: &str) {
     ui.add_space(6.0);
     ui.label(RichText::new(text.to_uppercase()).size(11.0).strong().color(pal().text_dim));
+}
+
+/// The strip (its name as shown) that controls this source, if any: by
+/// the same target, or because what it resolves to (the focused app, the
+/// default output) has this name.
+fn strip_for(strips: &[StripView], target: &Target, name: &str) -> Option<String> {
+    let same = |t: &Target| match (t, target) {
+        (Target::App { m: a, .. }, Target::App { m: b, .. })
+        | (Target::AppInput { m: a, .. }, Target::AppInput { m: b, .. }) => {
+            !a.regex && a.pattern.eq_ignore_ascii_case(&b.pattern)
+        }
+        (Target::Output { name: a, .. }, Target::Output { name: b, .. })
+        | (Target::Input { name: a, .. }, Target::Input { name: b, .. }) => a == b,
+        _ => false,
+    };
+    strips
+        .iter()
+        .find(|s| s.targets.iter().any(same) || s.resolved.iter().any(|r| r == name))
+        .map(|s| s.label.clone().unwrap_or_else(|| s.name.clone()))
 }
 
 /// A strip's name for screen readers: "Fader 1, Music (Spotify)".
