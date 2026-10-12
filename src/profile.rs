@@ -713,6 +713,14 @@ impl Profile {
         }
     }
 
+    /// The whole profile, to share or keep: what `import` reads back.
+    pub fn to_full_json(&self) -> Result<String> {
+        let mut p = self.clone();
+        p.preset = false;
+        p.bank = 0;
+        Ok(serde_json::to_string_pretty(&p)?)
+    }
+
     /// The profile in the original app's format (without this app's extras).
     pub fn to_spec_json(&self) -> Result<String> {
         let mut p = self.clone();
@@ -1007,5 +1015,25 @@ mod tests {
         p.rename_scene("Late", "Day");
         assert_eq!(p.scenes.len(), 3);
         assert!(p.scenes.contains_key("Late"));
+    }
+
+    #[test]
+    fn full_export_round_trips() {
+        let mut p = Profile::nanokontrol2();
+        let gid = p.groups.keys().next().unwrap().clone();
+        p.current_mut().entry(gid.clone()).or_default().targets.push(Target::DefaultOutput);
+        p.banks.push(Default::default());
+        p.scenes.insert("Night".into(), Scene { fade_ms: Some(2000), ..Default::default() });
+        p.current_mut().get_mut(&gid).unwrap().balance = Some(-0.25);
+        let back: Profile = serde_json::from_str(&p.to_full_json().unwrap()).unwrap();
+        assert_eq!(back.bank_count(), 2);
+        assert_eq!(back.scenes["Night"].fade_ms, Some(2000));
+        assert_eq!(back.assignments[&gid].targets, vec![Target::DefaultOutput]);
+        assert_eq!(back.assignments[&gid].balance, Some(-0.25));
+        assert_eq!(back.buttons.len(), p.buttons.len());
+        assert!(!back.preset);
+        // The spec.json export leaves all of that out.
+        let spec: Profile = serde_json::from_str(&p.to_spec_json().unwrap()).unwrap();
+        assert!(spec.scenes.is_empty() && spec.assignments.is_empty() && spec.buttons.is_empty());
     }
 }

@@ -38,8 +38,9 @@ enum Tab {
 #[derive(Clone, PartialEq)]
 enum PickPurpose {
     Import,
-    /// Export the profile with this id.
-    Export(String),
+    /// Export the profile with this id: everything, or (false) just the
+    /// controller in MIDI Mixer's format.
+    Export(String, bool),
 }
 
 /// A short message in the bottom-right corner.
@@ -383,8 +384,12 @@ impl App {
                     drop(sh);
                     self.send(UiCmd::ActivateProfile(id));
                 }
-                if ui.button(format!("{}  {}", icon::DOWNLOAD_SIMPLE, t!("Import a MIDI Mixer preset"))).clicked() {
+                if ui
+                    .button(format!("{}  {}", icon::DOWNLOAD_SIMPLE, t!("Import a profile or MIDI Mixer preset")))
+                    .clicked()
+                {
                     self.tab = Tab::Profiles;
+                    self.pick_file(PickPurpose::Import);
                 }
                 if ui.button(format!("{}  {}", icon::CROSSHAIR, t!("Map my own controller"))).clicked() {
                     let id = crate::profile::new_id();
@@ -623,7 +628,10 @@ impl App {
         std::thread::spawn(move || {
             let path = match &purpose {
                 PickPurpose::Import => crate::portal::pick_json(&t!("Import a profile"), None),
-                PickPurpose::Export(_) => crate::portal::pick_json(&t!("Export the profile"), Some("profile.json")),
+                PickPurpose::Export(_, full) => crate::portal::pick_json(
+                    &t!("Export the profile"),
+                    Some(if *full { "slidewire-profile.json" } else { "spec.json" }),
+                ),
             };
             if let Some(path) = path {
                 *slot.lock().unwrap() = Some((purpose, path));
@@ -648,8 +656,15 @@ impl App {
         if let Some((purpose, path)) = picked {
             match purpose {
                 PickPurpose::Import => self.import_path = path.display().to_string(),
-                PickPurpose::Export(id) => {
-                    let res = self.shared.lock().unwrap().store.profiles.get(&id).map(|p| p.to_spec_json());
+                PickPurpose::Export(id, full) => {
+                    let res = self
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .store
+                        .profiles
+                        .get(&id)
+                        .map(|p| if full { p.to_full_json() } else { p.to_spec_json() });
                     match res {
                         Some(Ok(json)) => match std::fs::write(&path, json) {
                             Ok(()) => self.flash(t!("Exported to %{path}", path = path.display())),

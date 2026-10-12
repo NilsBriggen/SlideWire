@@ -341,12 +341,26 @@ impl App {
                                     if widgets::icon_button(ui, icon::COPY, &t!("Duplicate")).clicked() {
                                         action = Some(("duplicate", id.clone()));
                                     }
-                                    if widgets::icon_button(ui, icon::EXPORT, &t!("Export"))
-                                        .on_hover_text(t!("Save it as a file (the MIDI Mixer spec.json format)"))
-                                        .clicked()
-                                    {
-                                        action = Some(("export", id.clone()));
-                                    }
+                                    let export = widgets::icon_button(ui, icon::EXPORT, &t!("Export"))
+                                        .on_hover_text(t!("Save it as a file"));
+                                    egui::Popup::menu(&export).show(|ui| {
+                                        if ui
+                                            .button(t!("Slidewire profile"))
+                                            .on_hover_text(t!(
+                                                "Everything: controls, assignments, banks, scenes, buttons and focus rules"
+                                            ))
+                                            .clicked()
+                                        {
+                                            action = Some(("export", id.clone()));
+                                        }
+                                        if ui
+                                            .button(t!("MIDI Mixer spec.json"))
+                                            .on_hover_text(t!("Only the controller's layout, for MIDI Mixer on Windows"))
+                                            .clicked()
+                                        {
+                                            action = Some(("export-spec", id.clone()));
+                                        }
+                                    });
                                     if widgets::icon_button(ui, icon::TRASH, &t!("Delete")).clicked() {
                                         action = Some(("delete", id.clone()));
                                     }
@@ -406,9 +420,9 @@ impl App {
                     self.flash(t!("Duplicated; give the copy a name"));
                 }
             }
-            "export" => {
+            "export" | "export-spec" => {
                 drop(sh);
-                self.pick_file(PickPurpose::Export(arg));
+                self.pick_file(PickPurpose::Export(arg, what == "export"));
             }
             "delete" => {
                 let name = sh.store.profiles.get(&arg).map(|p| p.name.clone()).unwrap_or_default();
