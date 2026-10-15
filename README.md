@@ -14,12 +14,12 @@ Built on KDE Plasma with PipeWire (or PulseAudio), and works on other desktops t
 **Arch and derivatives:** build the package from the bundled PKGBUILD. `packaging/aur-release` builds the latest release; `packaging/aur` builds the newest code.
 
 ```sh
-git clone https://git.briggen.dev/NilsBriggen/SlideWire.git
+git clone https://github.com/NilsBriggen/SlideWire.git
 cd SlideWire/packaging/aur-release
 makepkg -si
 ```
 
-**Any distribution:** each [release](https://git.briggen.dev/NilsBriggen/SlideWire/releases) has an archive laid out like `/usr`. It contains the program, menu entry, icons, systemd unit, man page and shell completions.
+**Any distribution:** each [release](https://github.com/NilsBriggen/SlideWire/releases) has an archive laid out like `/usr`. It contains the program, menu entry, icons, systemd unit, man page and shell completions.
 
 ```sh
 sudo tar -xzf slidewire-1.0.0-x86_64.tar.gz --strip-components=1 -C /
@@ -239,7 +239,7 @@ To also test importing the Windows app's profiles, point `SLIDEWIRE_WINDOWS_PROF
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports go to the [issue tracker](https://git.briggen.dev/NilsBriggen/SlideWire/issues). Please include the output of `slidewire --version` and `slidewire --doctor`.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports go to the [issue tracker](https://github.com/NilsBriggen/SlideWire/issues). Please include the output of `slidewire --version` and `slidewire --doctor`.
 
 ## License
 

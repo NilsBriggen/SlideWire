@@ -1112,7 +1112,7 @@ fn device_checklist(ui: &mut egui::Ui, names: &mut Vec<String>, devices: &[crate
     }
 }
 
-const REPO: &str = "https://git.briggen.dev/NilsBriggen/SlideWire";
+const REPO: &str = "https://github.com/NilsBriggen/SlideWire";
 
 fn appearance_card(ui: &mut egui::Ui, s: &mut Settings) {
     use crate::config::{Accent, ThemeMode};

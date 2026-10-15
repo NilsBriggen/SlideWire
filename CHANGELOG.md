@@ -19,6 +19,9 @@ All notable changes to Slidewire. The format follows
 - Shortcuts: PgUp/PgDn switch banks, Ctrl+Shift+M mutes the microphone.
 - The connection check and the log are translated.
 
+### Changed
+- The project now lives on GitHub: https://github.com/NilsBriggen/SlideWire. Releases include an aarch64 archive alongside x86_64.
+
 ### Fixed
 - Moving a fader no longer resets an app's or device's left/right balance.
 - Removing a bank left scenes and focus rules pointing at the wrong bank.
@@ -101,4 +104,4 @@ The first release.
 - Imported profiles that run commands ask before keeping them.
 - A crash is written to `~/.local/state/slidewire/crash.log`, and systemd restarts the service.
 
-[1.0.0]: https://git.briggen.dev/NilsBriggen/SlideWire/releases/tag/v1.0.0
+[1.0.0]: https://github.com/NilsBriggen/SlideWire/releases/tag/v1.0.0

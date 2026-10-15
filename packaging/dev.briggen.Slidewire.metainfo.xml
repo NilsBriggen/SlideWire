@@ -23,21 +23,21 @@
     </ul>
   </description>
   <launchable type="desktop-id">dev.briggen.Slidewire.desktop</launchable>
-  <url type="homepage">https://git.briggen.dev/NilsBriggen/SlideWire</url>
-  <url type="bugtracker">https://git.briggen.dev/NilsBriggen/SlideWire/issues</url>
-  <url type="vcs-browser">https://git.briggen.dev/NilsBriggen/SlideWire</url>
+  <url type="homepage">https://github.com/NilsBriggen/SlideWire</url>
+  <url type="bugtracker">https://github.com/NilsBriggen/SlideWire/issues</url>
+  <url type="vcs-browser">https://github.com/NilsBriggen/SlideWire</url>
   <screenshots>
     <screenshot type="default">
       <caption>The mixer: one strip per hardware channel</caption>
-      <image>https://git.briggen.dev/NilsBriggen/SlideWire/raw/branch/main/assets/screenshots/mixer.png</image>
+      <image>https://raw.githubusercontent.com/NilsBriggen/SlideWire/main/assets/screenshots/mixer.png</image>
     </screenshot>
     <screenshot>
       <caption>The controller, drawn live</caption>
-      <image>https://git.briggen.dev/NilsBriggen/SlideWire/raw/branch/main/assets/screenshots/controller.png</image>
+      <image>https://raw.githubusercontent.com/NilsBriggen/SlideWire/main/assets/screenshots/controller.png</image>
     </screenshot>
     <screenshot>
       <caption>Light theme</caption>
-      <image>https://git.briggen.dev/NilsBriggen/SlideWire/raw/branch/main/assets/screenshots/mixer-light.png</image>
+      <image>https://raw.githubusercontent.com/NilsBriggen/SlideWire/main/assets/screenshots/mixer-light.png</image>
     </screenshot>
   </screenshots>
   <categories>
